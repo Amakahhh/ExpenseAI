@@ -1,0 +1,253 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Custom properties ─────────────────────────────────────────────────── */
+:root {
+  --void:    #05050A;
+  --s1:      #0D0D1A;
+  --s2:      #12121F;
+  --s3:      #1A1A2E;
+  --violet:  #8C7CF8;
+  --cyan:    #00D4FF;
+  --warm:    #FF6B35;
+  --success: #00E5A0;
+  --tp:      #F0F0FF;
+  --tm:      #6B6B8A;
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+
+body {
+  background-color: var(--void);
+  color: var(--tp);
+  font-family: var(--font-body, Inter, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, .font-display { font-family: var(--font-display, "Bricolage Grotesque", sans-serif); }
+.font-mono, code, kbd, pre     { font-family: var(--font-mono, "Azeret Mono", monospace); }
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--s1); }
+::-webkit-scrollbar-thumb { background: #2A2A4A; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--violet); }
+
+/* ── Neural grid background ────────────────────────────────────────────── */
+.neural-grid {
+  background-image:
+    linear-gradient(rgba(140,124,248,0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(140,124,248,0.018) 1px, transparent 1px);
+  background-size: 64px 64px;
+}
+
+/* ── Skeleton shimmer ──────────────────────────────────────────────────── */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--s1) 25%,
+    rgba(108,99,255,0.07) 50%,
+    var(--s1) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+  border-radius: 6px;
+}
+
+/* ── Holographic shimmer text ──────────────────────────────────────────── */
+.holo-text {
+  background: linear-gradient(
+    90deg,
+    var(--tp) 0%,
+    var(--tp) 30%,
+    rgba(108,99,255,0.9) 42%,
+    rgba(0,212,255,0.95) 50%,
+    rgba(108,99,255,0.9) 58%,
+    var(--tp) 70%,
+    var(--tp) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: holoShimmer 4s linear infinite;
+}
+
+/* ── Violet glow surface ───────────────────────────────────────────────── */
+.violet-glow {
+  box-shadow:
+    0 0 0 1px rgba(140,124,248,0.12),
+    0 4px 24px rgba(140,124,248,0.06);
+  transition: box-shadow 0.3s ease;
+}
+.violet-glow:hover {
+  box-shadow:
+    0 0 0 1px rgba(140,124,248,0.25),
+    0 8px 40px rgba(140,124,248,0.13);
+}
+
+/* ── Area chart glow line ──────────────────────────────────────────────── */
+.chart-glow-line {
+  filter: drop-shadow(0 0 4px rgba(140,124,248,0.7)) drop-shadow(0 0 10px rgba(140,124,248,0.25));
+}
+
+/* ── Card base ─────────────────────────────────────────────────────────── */
+.card {
+  background: var(--s1);
+  border: 1px solid rgba(140,124,248,0.08);
+  border-radius: 18px;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+.card:hover {
+  border-color: rgba(140,124,248,0.18);
+}
+
+/* ── Stagger entrance delays ───────────────────────────────────────────── */
+.delay-0  { animation-delay: 0s;     }
+.delay-1  { animation-delay: 0.08s;  }
+.delay-2  { animation-delay: 0.16s;  }
+.delay-3  { animation-delay: 0.24s;  }
+.delay-4  { animation-delay: 0.32s;  }
+.delay-5  { animation-delay: 0.40s;  }
+.delay-6  { animation-delay: 0.48s;  }
+.delay-7  { animation-delay: 0.56s;  }
+
+/* ── Pipeline animation ────────────────────────────────────────────────── */
+.pipeline-beam {
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--violet), var(--cyan), transparent);
+  animation: beamTravel 1.2s ease-in-out;
+}
+@keyframes beamTravel {
+  0%   { top: 0%;   opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+/* ── Category row hover borders ────────────────────────────────────────── */
+.row-hover { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+.row-hover:hover { transform: translateY(-1px); }
+
+.border-cat-food          { border-left: 2px solid #F59E0B; }
+.border-cat-transport     { border-left: 2px solid #00D4FF; }
+.border-cat-entertainment { border-left: 2px solid #A855F7; }
+.border-cat-bills         { border-left: 2px solid #EF4444; }
+.border-cat-health        { border-left: 2px solid #EC4899; }
+.border-cat-education     { border-left: 2px solid #EAB308; }
+.border-cat-shopping      { border-left: 2px solid #F97316; }
+.border-cat-other         { border-left: 2px solid #6B6B8A; }
+
+/* ── Typewriter cursor ─────────────────────────────────────────────────── */
+@keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0; } }
+.cursor::after {
+  content: '|';
+  color: var(--violet);
+  animation: blink 1s step-end infinite;
+  margin-left: 1px;
+  font-weight: 200;
+}
+
+/* ── D3 graph tooltip ──────────────────────────────────────────────────── */
+.graph-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--s1);
+  border: 1px solid rgba(108,99,255,0.3);
+  border-radius: 10px;
+  padding: 10px 14px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 10;
+  backdrop-filter: blur(8px);
+}
+
+/* ── Lollipop chart ────────────────────────────────────────────────────── */
+.lollipop-line {
+  background: linear-gradient(90deg, rgba(108,99,255,0.15), rgba(108,99,255,0.5));
+  height: 1px;
+  transition: width 0.9s cubic-bezier(0.22,1,0.36,1);
+}
+.lollipop-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--violet);
+  box-shadow: 0 0 8px rgba(140,124,248,0.5);
+  flex-shrink: 0;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.lollipop-dot:hover { transform: scale(1.4); box-shadow: 0 0 16px rgba(140,124,248,0.75); }
+
+/* ── Particle field ────────────────────────────────────────────────────── */
+.particle {
+  position: absolute;
+  width: 2px; height: 2px;
+  border-radius: 50%;
+  background: var(--violet);
+  animation: particleDrift var(--dur,4s) ease-in-out var(--delay,0s) infinite;
+}
+.particle-cyan { background: var(--cyan); }
+
+/* ── Treemap cell ──────────────────────────────────────────────────────── */
+.treemap-cell {
+  transition: filter 0.2s ease, transform 0.2s ease;
+  cursor: default;
+  overflow: hidden;
+  border-radius: 4px;
+}
+.treemap-cell:hover { filter: brightness(1.2); transform: scale(1.01); z-index: 2; }
+
+/* ── Toast ─────────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--s1);
+  border: 1px solid var(--success);
+  border-radius: 40px;
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--success);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 0 24px rgba(0,229,160,0.2);
+  z-index: 9999;
+  white-space: nowrap;
+}
+
+/* ── Inline row expansion ──────────────────────────────────────────────── */
+.row-expanded {
+  background: rgba(108,99,255,0.04);
+  border-top: 1px solid rgba(108,99,255,0.1);
+  border-bottom: 1px solid rgba(108,99,255,0.1);
+}
+
+/* ── Confidence bar ────────────────────────────────────────────────────── */
+.conf-bar-track {
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.conf-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.8s cubic-bezier(0.22,1,0.36,1);
+}
+
+/* ── Ambient orb ───────────────────────────────────────────────────────── */
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  pointer-events: none;
+}

@@ -1,0 +1,87 @@
+# ── Node / Next.js ───────────────────────────────────────────────────────────
+node_modules/
+.next/
+.nuxt/
+.output/
+.vercel/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# ── ML model artefacts (large binaries — regenerate with train.py) ────────────
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+*.onnx
+*.safetensors
+ml/model/
+smart-expense-system/backend/ml_model/
+
+# ── Databases ─────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# ── Environment / secrets ─────────────────────────────────────────────────────
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+# keep .env.example
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.code-workspace
+.cursor/
+
+# ── Real bank statement data (NEVER commit to public repos) ──────────────────
+dataset/
+*.pdf
+*.xlsx
+*.xls
+*.csv
+
+# ── Misc build / cache ────────────────────────────────────────────────────────
+*.log
+logs/
+tmp/
+temp/
+.cache/
