@@ -4,7 +4,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from models.database import init_db
-from services.classifier import _load_model
 from routes import upload, categorize, correct, analytics, transactions
 from fastapi import UploadFile, File
 
@@ -12,7 +11,6 @@ from fastapi import UploadFile, File
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    _load_model()
     yield
 
 
