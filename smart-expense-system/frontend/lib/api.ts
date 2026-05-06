@@ -1,4 +1,6 @@
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// All requests go through the Next.js rewrite at /backend/* so the browser
+// never contacts Render directly — no CORS needed.
+const BASE_URL = "/backend";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
