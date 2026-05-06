@@ -1,7 +1,6 @@
 import pickle
 import numpy as np
 from pathlib import Path
-from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from typing import Optional
 
@@ -235,7 +234,7 @@ _CATEGORY_SEEDS: dict[str, list[str]] = {
     ],
 }
 
-_sentence_model: Optional[SentenceTransformer] = None
+_sentence_model = None
 _prototypes: Optional[dict]     = None
 _prototype_counts: Optional[dict] = None
 
@@ -244,6 +243,7 @@ def _load_model() -> None:
     global _sentence_model, _prototypes, _prototype_counts
 
     if _sentence_model is None:
+        from sentence_transformers import SentenceTransformer
         _sentence_model = SentenceTransformer("all-MiniLM-L6-v2")
 
     if _prototypes is not None:
