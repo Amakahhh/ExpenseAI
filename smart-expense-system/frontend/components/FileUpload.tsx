@@ -15,7 +15,7 @@ const STAGES = [
 
 const STAGE_MS = 1100; // ms per stage
 
-type Phase = "idle" | "dragging" | "processing" | "done";
+type Phase = "idle" | "dragging" | "processing" | "warming" | "done";
 
 /* Tiny floating particle */
 function Particle({ style }: { style: React.CSSProperties }) {
@@ -61,7 +61,7 @@ export default function FileUpload() {
   // Generate particles once on mount
   useEffect(() => {
     setParticles(
-      Array.from({ length: 18 }, (_, i) => ({
+      Array.from({ length: 18 }, () => ({
         left:  `${Math.random() * 100}%`,
         top:   `${60 + Math.random() * 35}%`,
         "--dur":   `${3 + Math.random() * 4}s`,
@@ -99,6 +99,9 @@ export default function FileUpload() {
       await new Promise((r) => setTimeout(r, STAGE_MS));
       setStageIdx(i + 1);
     }
+
+    // If API is still running after animation, show warming state
+    if (!apiDone.current) setPhase("warming");
 
     // Wait for API if still running
     try {
@@ -141,7 +144,7 @@ export default function FileUpload() {
   const pct = stageIdx < 0 ? 0 : Math.round(((stageIdx + 1) / STAGES.length) * 100);
 
   /* ── PROCESSING STATE ──────────────────────────────────────────────── */
-  if (phase === "processing" || phase === "done") {
+  if (phase === "processing" || phase === "warming" || phase === "done") {
     return (
       <div className="w-full max-w-md mx-auto animate-fade-focus">
         {/* Progress ring + counter */}
@@ -226,6 +229,21 @@ export default function FileUpload() {
             );
           })}
         </div>
+
+        {/* Warming-up notice — shown while waiting for Render cold start */}
+        {phase === "warming" && (
+          <div
+            className="mt-6 flex items-center gap-3 px-4 py-3 rounded-xl text-sm"
+            style={{
+              background: "rgba(108,99,255,0.08)",
+              border: "1px solid rgba(108,99,255,0.2)",
+              color: "#6B6B8A",
+            }}
+          >
+            <div className="w-2 h-2 rounded-full shrink-0 animate-pulse" style={{ background: "#6C63FF" }} />
+            <span>Server is warming up — this can take up to 60 s on first load…</span>
+          </div>
+        )}
       </div>
     );
   }

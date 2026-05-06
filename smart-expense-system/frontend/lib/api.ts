@@ -54,12 +54,29 @@ export interface Analytics {
 export async function uploadFile(file: File): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${BASE_URL}/upload`, { method: "POST", body: form });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as any).detail || "Upload failed.");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180_000); // 3 min — covers Render cold start
+
+  try {
+    const res = await fetch(`${BASE_URL}/upload`, {
+      method: "POST",
+      body: form,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as any).detail || "Upload failed.");
+    }
+    return res.json();
+  } catch (err: any) {
+    if (err.name === "AbortError") {
+      throw new Error("Server took too long to respond. It may still be waking up — please try again.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
   }
-  return res.json();
 }
 
 export async function getAnalytics(sessionId?: string): Promise<Analytics> {
