@@ -4,8 +4,10 @@ from sqlalchemy.orm import Session
 from models.database import Transaction
 
 
-def compute_analytics(db: Session, session_id: Optional[str] = None) -> dict:
+def compute_analytics(db: Session, session_id: Optional[str] = None, user_id: Optional[int] = None) -> dict:
     query = db.query(Transaction)
+    if user_id is not None:
+        query = query.filter(Transaction.user_id == user_id)
     if session_id:
         query = query.filter(Transaction.session_id == session_id)
     transactions = query.all()
@@ -16,7 +18,10 @@ def compute_analytics(db: Session, session_id: Optional[str] = None) -> dict:
             "by_month": [],
             "top_merchants": [],
             "total_spend": 0.0,
+            "total_income": 0.0,
             "transaction_count": 0,
+            "income_count": 0,
+            "total_count": 0,
         }
 
     category_agg: dict = defaultdict(lambda: {"total": 0.0, "count": 0})

@@ -1,7 +1,8 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from models.database import get_db
+from models.database import get_db, User
+from routes.auth import get_current_user
 from services.analytics_service import compute_analytics
 
 router = APIRouter()
@@ -11,5 +12,6 @@ router = APIRouter()
 def get_analytics(
     session_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    return compute_analytics(db, session_id)
+    return compute_analytics(db, session_id, user_id=current_user.id)

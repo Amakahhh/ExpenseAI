@@ -1,65 +1,78 @@
+"use client";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import FileUpload from "@/components/FileUpload";
+import SessionHistory from "@/components/SessionHistory";
+import { getToken } from "@/lib/api";
+import { LogoFull } from "@/components/Logo";
 
 export default function HomePage() {
+  const router = useRouter();
+  useEffect(() => { if (!getToken()) router.replace("/login"); }, [router]);
+  if (typeof window !== "undefined" && !getToken()) return null;
+
   return (
-    <main
-      className="min-h-screen neural-grid flex flex-col items-center justify-center relative overflow-hidden px-6"
-      style={{ background: "#05050A" }}
-    >
-      {/* Ambient orbs */}
-      <div className="orb w-[500px] h-[500px] -top-40 left-1/2 -translate-x-1/2"
-        style={{ background: "rgba(108,99,255,0.08)" }} />
-      <div className="orb w-[300px] h-[300px] bottom-0 right-0"
-        style={{ background: "rgba(0,212,255,0.05)" }} />
+    <main className="landing-page">
 
-      <div className="relative z-10 w-full max-w-2xl animate-fade-focus flex flex-col items-center gap-10">
+      {/* Header */}
+      <header style={{
+        maxWidth: 1000, margin: "0 auto",
+        padding: "22px 32px",
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        position: "relative", zIndex: 1,
+      }}>
+        <LogoFull size={28} />
+        <nav style={{ display: "flex", gap: 28, alignItems: "center", fontSize: 13, fontWeight: 500 }} className="hero-nav">
+          <Link href="/dashboard"    style={{ color: "var(--muted)", textDecoration: "none" }}>Dashboard</Link>
+          <Link href="/transactions" style={{ color: "var(--muted)", textDecoration: "none" }}>Transactions</Link>
+          <Link href="/analytics"    style={{ color: "var(--muted)", textDecoration: "none" }}>Analytics</Link>
+        </nav>
+        <Link href="/dashboard" className="btn-primary" style={{ fontSize: 12, padding: "8px 16px" }}>
+          Dashboard →
+        </Link>
+      </header>
 
-        {/* Eyebrow */}
-        <p
-          className="font-mono text-[11px] select-none"
-          style={{ color: "rgba(140,124,248,0.5)", letterSpacing: "0.2em" }}
-        >
-          BERT &nbsp;·&nbsp; FEW-SHOT &nbsp;·&nbsp; GRAPH NETWORKS &nbsp;·&nbsp; NGN NATIVE
+      {/* Hero — centred upload focus */}
+      <section style={{
+        maxWidth: 600, margin: "0 auto",
+        padding: "80px 32px 60px",
+        display: "flex", flexDirection: "column", alignItems: "center",
+        textAlign: "center",
+        position: "relative", zIndex: 1,
+      }}>
+        <p className="hero-eyebrow">AI expense intelligence</p>
+        <h1 className="hero-headline">
+          Your money,<br />finally clear.
+        </h1>
+        <p style={{ maxWidth: 380, fontSize: 15, lineHeight: 1.75, color: "var(--muted)", marginBottom: 40 }}>
+          Upload a bank statement and get instant AI categorisation, spending charts, and merchant insights.
         </p>
 
-        {/* Hero */}
-        <div className="text-center space-y-4">
-          <h1 className="font-display font-bold leading-[1.06] tracking-tight"
-            style={{ fontSize: "clamp(2.4rem, 6vw, 4rem)", color: "#F0F0FF" }}>
-            Intelligent{" "}
-            <span style={{
-              background: "linear-gradient(135deg, #6C63FF 0%, #00D4FF 100%)",
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-            }}>
-              expense
-            </span>
-            {" "}analysis
-          </h1>
-          <p className="text-base max-w-md mx-auto leading-relaxed" style={{ color: "#6B6B8A" }}>
-            Upload any Nigerian bank statement. The AI reads every transaction,
-            classifies it, and builds a living spending map — in seconds.
-          </p>
+        <div className="upload-panel" style={{ width: "100%", maxWidth: 480 }}>
+          <FileUpload />
         </div>
 
-        {/* Upload widget */}
-        <FileUpload />
-
-        {/* Capability strip */}
-        <div className="flex items-center gap-8 flex-wrap justify-center">
-          {[
-            { val: "8",      label: "Categories"        },
-            { val: "384",    label: "Embedding dims"    },
-            { val: "CSV·XLS",label: "Formats supported" },
-            { val: "₦",      label: "Naira-native"      },
-          ].map(({ val, label }) => (
-            <div key={label} className="text-center">
-              <p className="font-mono text-lg font-semibold" style={{ color: "#6C63FF" }}>{val}</p>
-              <p className="text-xs mt-0.5" style={{ color: "#6B6B8A" }}>{label}</p>
-            </div>
-          ))}
+        <div style={{ width: "100%", maxWidth: 480, marginTop: 32 }}>
+          <SessionHistory />
         </div>
-      </div>
+      </section>
+
+      {/* Footer */}
+      <footer style={{
+        position: "relative", zIndex: 1,
+        maxWidth: 1000, margin: "0 auto",
+        padding: "24px 32px",
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        borderTop: "1px solid var(--border)",
+      }}>
+        <p style={{ fontSize: 12, color: "var(--ghost)" }}>© 2024 ExpenseAI</p>
+        <p style={{ fontSize: 12, color: "var(--ghost)" }}>
+          <Link href="/dashboard" style={{ color: "var(--ghost)", textDecoration: "none" }}>Dashboard</Link>
+          {" · "}
+          <Link href="/analytics" style={{ color: "var(--ghost)", textDecoration: "none" }}>Analytics</Link>
+        </p>
+      </footer>
     </main>
   );
 }

@@ -5,9 +5,9 @@ import * as d3 from "d3";
 import { MerchantStat } from "@/lib/api";
 
 const CAT_COLOR: Record<string, string> = {
-  food:"#F59E0B", transport:"#00D4FF", entertainment:"#A855F7",
+  food:"#F59E0B", transport:"#0EA5E9", entertainment:"#8B5CF6",
   bills:"#EF4444", health:"#EC4899", education:"#EAB308",
-  shopping:"#F97316", other:"#6B6B8A",
+  shopping:"#F97316", other:"#6B7280",
 };
 
 interface GNode extends d3.SimulationNodeDatum {
@@ -52,24 +52,13 @@ export default function MerchantGraph({ merchants }: { merchants: MerchantStat[]
     const maxTotal  = Math.max(...nodes.map((n) => n.total), 1);
     const nodeR     = (t: number) => 9 + (t / maxTotal) * 22;
 
-    /* defs */
-    const defs = svg.append("defs");
-    const glow = defs.append("filter").attr("id", "glow-filter");
-    glow.append("feGaussianBlur").attr("stdDeviation", "3").attr("result", "blur");
-    const merge = glow.append("feMerge");
-    merge.append("feMergeNode").attr("in", "blur");
-    merge.append("feMergeNode").attr("in", "SourceGraphic");
-
     /* container */
     const g = svg.append("g");
 
-    /* links */
+    /* links — thin grey lines */
     const linkEls = g.append("g").selectAll("line").data(links).join("line")
-      .attr("stroke", "rgba(108,99,255,0.18)")
-      .attr("stroke-width", (d) => 0.5 + d.strength * 1.5)
-      .attr("stroke-dasharray", "800")
-      .attr("stroke-dashoffset", "800")
-      .style("animation", (_, i) => `drawEdge 1.4s ease ${i * 0.08}s forwards`);
+      .attr("stroke", "#E0E0E0")
+      .attr("stroke-width", (d) => 0.5 + d.strength);
 
     /* node groups */
     const dragBehavior = d3.drag<SVGGElement, GNode>()
@@ -81,46 +70,42 @@ export default function MerchantGraph({ merchants }: { merchants: MerchantStat[]
       .attr("class", "cursor-grab active:cursor-grabbing")
       .call(dragBehavior as any);
 
-    /* outer glow ring */
-    nodeG.append("circle")
-      .attr("r", (d) => nodeR(d.total) + 8)
-      .attr("fill", (d) => CAT_COLOR[d.category] || "#6B6B8A")
-      .attr("opacity", 0.08);
-
-    /* main circle */
+    /* main circle — white fill, ink stroke */
     nodeG.append("circle")
       .attr("r", (d) => nodeR(d.total))
-      .attr("fill", (d) => `${CAT_COLOR[d.category] || "#6B6B8A"}CC`)
-      .attr("stroke", (d) => CAT_COLOR[d.category] || "#6B6B8A")
-      .attr("stroke-width", 1.2)
-      .attr("filter", "url(#glow-filter)");
+      .attr("fill", "#FFFFFF")
+      .attr("stroke", "#111111")
+      .attr("stroke-width", 1);
 
-    /* label */
+    /* label below node */
     nodeG.append("text")
-      .attr("text-anchor", "middle").attr("dy", "0.35em")
-      .attr("font-size", 8).attr("font-family", "var(--font-mono)")
-      .attr("fill", "#F0F0FF").attr("pointer-events", "none")
-      .text((d) => d.id.split(" ").slice(0, 2).join(" ").slice(0, 10));
+      .attr("text-anchor", "middle")
+      .attr("dy", (d) => nodeR(d.total) + 14)
+      .attr("font-size", 10)
+      .attr("font-family", "Inter, sans-serif")
+      .attr("fill", "#AAAAAA")
+      .attr("pointer-events", "none")
+      .text((d) => d.id.split(" ").slice(0, 2).join(" ").slice(0, 14));
 
     /* hover */
     nodeG
       .on("mouseover", function (ev, d) {
-        d3.select(this).select("circle:nth-child(2)")
-          .transition().duration(180).attr("r", nodeR(d.total) * 1.28);
+        d3.select(this).select("circle")
+          .transition().duration(120).attr("stroke", "#C07A10").attr("stroke-width", 2);
         if (!tipRef.current) return;
         const rect = el.getBoundingClientRect();
         tipRef.current.style.opacity = "1";
         tipRef.current.style.left   = `${ev.clientX - rect.left + 12}px`;
         tipRef.current.style.top    = `${ev.clientY - rect.top  - 12}px`;
         tipRef.current.innerHTML    = `
-          <p style="font-family:var(--font-display);font-size:13px;font-weight:600;color:#F0F0FF;margin-bottom:4px">${d.id}</p>
-          <p style="font-family:var(--font-mono);font-size:11px;color:#00D4FF">₦${d.total.toLocaleString("en-NG")}</p>
-          <p style="font-family:var(--font-mono);font-size:10px;color:#6B6B8A;margin-top:2px;text-transform:capitalize">${d.category} · ${d.count}×</p>
+          <p style="font-size:13px;font-weight:600;color:#111111;margin-bottom:4px;font-family:Inter,sans-serif">${d.id}</p>
+          <p style="font-size:12px;color:#777777;font-family:Inter,sans-serif">₦${d.total.toLocaleString("en-NG")}</p>
+          <p style="font-size:11px;color:#AAAAAA;margin-top:2px;text-transform:capitalize;font-family:Inter,sans-serif">${d.category} · ${d.count} transactions</p>
         `;
       })
       .on("mouseout", function (_, d) {
-        d3.select(this).select("circle:nth-child(2)")
-          .transition().duration(180).attr("r", nodeR(d.total));
+        d3.select(this).select("circle")
+          .transition().duration(120).attr("stroke", "#111111").attr("stroke-width", 1);
         if (tipRef.current) tipRef.current.style.opacity = "0";
       });
 

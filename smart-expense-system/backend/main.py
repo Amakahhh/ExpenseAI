@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from models.database import init_db
-from routes import upload, categorize, correct, analytics, transactions
+from routes import upload, categorize, correct, analytics, transactions, history, auth
 from fastapi import UploadFile, File
 
 
@@ -38,11 +38,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router,          prefix="/auth",          tags=["auth"])
 app.include_router(upload.router,        prefix="/upload",       tags=["upload"])
 app.include_router(categorize.router,    prefix="/categorize",   tags=["categorize"])
 app.include_router(correct.router,       prefix="/correct",      tags=["corrections"])
 app.include_router(analytics.router,     prefix="/analytics",    tags=["analytics"])
 app.include_router(transactions.router,  prefix="/transactions",  tags=["transactions"])
+app.include_router(history.router,       prefix="/history",        tags=["history"])
 
 
 @app.get("/")

@@ -1,37 +1,33 @@
 import type { Metadata } from "next";
-import { Bricolage_Grotesque, Azeret_Mono, DM_Sans } from "next/font/google";
+import { Inter, Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const bricolageGrotesque = Bricolage_Grotesque({
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
+
+const plusJakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
   variable: "--font-display",
   weight: ["400", "500", "600", "700", "800"],
   display: "swap",
 });
 
-const azeretMono = Azeret_Mono({
+const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
   variable: "--font-mono",
-  weight: ["400", "500", "600"],
-  display: "swap",
-});
-
-const dmSans = DM_Sans({
-  subsets: ["latin"],
-  variable: "--font-body",
+  weight: ["400", "500"],
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "ExpenseIQ — Smart Expense Intelligence",
-  description: "AI-powered Nigerian bank transaction classifier — BERT · Few-Shot · Graph Networks",
+  title: "ExpenseAI",
+  description: "AI-powered expense intelligence. Upload any bank statement and instantly understand your spending.",
   icons: { icon: "/favicon.ico" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${bricolageGrotesque.variable} ${azeretMono.variable} ${dmSans.variable}`}>
-      <body className="bg-void text-text-primary antialiased font-body">
+    <html lang="en" className={`${inter.variable} ${plusJakarta.variable} ${jetbrainsMono.variable}`}>
+      <body style={{ fontFamily: "var(--font-inter, Inter, sans-serif)" }}>
         {children}
       </body>
     </html>

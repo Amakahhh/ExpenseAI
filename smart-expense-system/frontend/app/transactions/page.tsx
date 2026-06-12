@@ -1,88 +1,58 @@
 "use client";
-
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import Navbar from "@/components/Navbar";
+import Sidebar from "@/components/Sidebar";
 import TransactionTable from "@/components/TransactionTable";
-import { getTransactions, Transaction } from "@/lib/api";
-
-function Skeleton() {
-  return (
-    <div className="space-y-3">
-      {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="skeleton h-12 rounded-xl" style={{ animationDelay: `${i * 0.06}s` }} />
-      ))}
-    </div>
-  );
-}
+import { getTransactions, Transaction, getToken } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 export default function TransactionsPage() {
+  const router = useRouter();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading]           = useState(true);
-  const [error, setError]               = useState<string | null>(null);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState<string | null>(null);
 
   useEffect(() => {
+    if (!getToken()) { router.replace("/login"); return; }
     const sid = sessionStorage.getItem("session_id") ?? undefined;
     getTransactions(sid)
       .then(setTransactions)
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [router]);
 
   return (
-    <div className="min-h-screen neural-grid" style={{ background: "#05050A" }}>
-      <Navbar />
-      <main className="max-w-7xl mx-auto px-6 py-8 animate-fade-focus">
+    <div style={{ display: "flex", minHeight: "100vh" }}>
+      <Sidebar />
+      <main className="page-content">
 
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="font-display font-bold text-2xl" style={{ color: "#F0F0FF" }}>
-              Transactions
-            </h1>
-            {!loading && !error && (
-              <p className="font-mono text-xs mt-1" style={{ color: "#6B6B8A" }}>
-                {transactions.length} rows · click any row to expand &amp; correct
-              </p>
-            )}
-          </div>
-          <Link
-            href="/dashboard"
-            className="flex items-center gap-1.5 text-xs font-mono px-4 py-2 rounded-lg"
-            style={{ background: "rgba(108,99,255,0.08)", color: "#6C63FF", border: "1px solid rgba(108,99,255,0.15)" }}
-          >
-            ← Dashboard
-          </Link>
+        <div style={{ marginBottom: 32 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--ink)", letterSpacing: "-0.02em", marginBottom: 6 }}>
+            All Transactions
+          </h1>
+          {!loading && !error && (
+            <p style={{ fontSize: 13, color: "var(--muted)" }}>
+              {transactions.length.toLocaleString()} transactions
+            </p>
+          )}
         </div>
 
         {loading ? (
-          <Skeleton />
+          <div style={{ border: "1px solid var(--border)", borderRadius: 3, overflow: "hidden" }}>
+            {Array.from({ length: 10 }).map((_, i) => (
+              <div key={i} className="skeleton" style={{ height: 50, borderRadius: 0, borderBottom: "1px solid var(--border)" }} />
+            ))}
+          </div>
         ) : error ? (
-          <div className="flex flex-col items-center justify-center py-32 gap-4">
-            <p className="font-mono text-sm" style={{ color: "#FF6B35" }}>{error}</p>
-            <Link href="/" className="text-sm font-mono underline" style={{ color: "#6C63FF" }}>
-              ← Upload a file first
-            </Link>
+          <div style={{ paddingTop: 64, textAlign: "center" }}>
+            <p className="error-box" style={{ display: "inline-block", marginBottom: 16 }}>{error}</p>
+            <br />
+            <Link href="/" style={{ color: "var(--ink)", fontWeight: 500, textDecoration: "underline" }}>Upload a file first</Link>
           </div>
         ) : transactions.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-32 gap-4 relative overflow-hidden">
-            {Array.from({ length: 12 }).map((_, i) => (
-              <div key={i} className="particle" style={{
-                left: `${10 + Math.random() * 80}%`,
-                top:  `${20 + Math.random() * 60}%`,
-                "--dur":   `${3 + Math.random() * 3}s`,
-                "--delay": `${Math.random() * 3}s`,
-                "--dx":    `${(Math.random() - 0.5) * 60}px`,
-              } as React.CSSProperties} />
-            ))}
-            <p className="font-display text-lg font-semibold" style={{ color: "#F0F0FF" }}>
-              No transactions found
-            </p>
-            <p className="font-mono text-sm" style={{ color: "#6B6B8A" }}>
-              Upload a bank statement to begin
-            </p>
-            <Link href="/" className="mt-2 text-sm font-mono underline" style={{ color: "#6C63FF" }}>
-              Upload now →
-            </Link>
+          <div style={{ paddingTop: 80, textAlign: "center" }}>
+            <p style={{ fontSize: 15, color: "var(--muted)", marginBottom: 20 }}>No transactions found.</p>
+            <Link href="/" className="btn-primary" style={{ display: "inline-flex" }}>Upload a bank statement</Link>
           </div>
         ) : (
           <TransactionTable transactions={transactions} />

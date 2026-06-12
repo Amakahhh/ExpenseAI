@@ -13,8 +13,7 @@ Algorithm
    → that is where the transaction data starts (first_data_row).
 4. Look at EVERY row before first_data_row and pick the one with the
    most distinct, non-date, non-amount text values
-   → that is the header row.  (A full 6-column header beats a 2-column
-   mini-header from the metadata section.)
+   → that is the header row.
 5. Build the dataframe: header row names the columns; data = rows from
    first_data_row onwards.
 6. Detect column roles by CONTENT:
@@ -23,39 +22,39 @@ Algorithm
                     (keyword "debit"/"credit" used only to split the two)
      • narr_col   → among remaining columns, the one with the highest
                     "text richness" score (long, diverse, non-numeric strings)
-7. If narr_col is still None, relax and try the next-best text column.
-8. Extract rows, skipping blanks and header-repetition rows.
+7. Nuclear fallback: if all extracted amounts are still 0, scan every
+   unassigned column for non-zero numeric values and use the best one.
 """
 
 import re
 import uuid
+import datetime as _dt
 import pandas as pd
 from io import BytesIO
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.orm import Session
-from models.database import get_db, Transaction
+from models.database import get_db, Transaction, UploadSession, User
+from routes.auth import get_current_user
 from services.classifier import classify_batch
 
 router = APIRouter()
 
 # ── regexes ──────────────────────────────────────────────────────────────────
 _DATE_RE = re.compile(
-    r"(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})"
-    r"|(\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2})"
-    r"|(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4})"
-    r"|([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})",
+    r"(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})"           # 01/01/2024  01-01-24
+    r"|(\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2})"             # 2024-01-01  2024/01/01
+    r"|(\d{1,2}[/\-\.][A-Za-z]{3,9}[/\-\.]\d{2,4})"     # 01-Jan-2024  01/January/24
+    r"|(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4})"             # 01 Jan 2024
+    r"|([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{2,4})",          # Jan 01, 2024
     re.IGNORECASE,
 )
 
-_NUMBER_RE = re.compile(r"^[₦$]?[\d,]+\.?\d*$")   # matches "5,000.00", "₦3500"
-
 # Strings treated as "empty" in amount cells
-_NULL_VALS = {"", "--", "-", "nil", "n/a", "none", "nan"}
+_NULL_VALS = {"", "--", "-", "nil", "n/a", "none", "nan", "null"}
 
-_MIN_DESC_LEN = 4   # minimum chars for a valid description
+_MIN_DESC_LEN = 4
 
-# Keywords that strongly indicate an incoming credit / income transaction.
-# Used only when the file has a single combined amount column (no separate debit/credit cols).
+# Keywords that strongly indicate an incoming credit / income transaction
 _INCOME_RE = re.compile(
     r"\b(salary|payroll|wages|credit\s*alert|inflow|reversal|refund|"
     r"dividend|interest\s*earned|commission\s*(earned|credit)|"
@@ -65,7 +64,7 @@ _INCOME_RE = re.compile(
 )
 
 
-# ── primitive helpers ────────────────────────────────────────────────────────
+# ── primitive helpers ─────────────────────────────────────────────────────────
 
 def _clean(v) -> str:
     return str(v).strip()
@@ -76,17 +75,34 @@ def _is_date(v: str) -> bool:
     return bool(_DATE_RE.search(s)) and len(s) >= 6
 
 
+def _strip_amount(raw: str) -> str:
+    """Normalise an amount string to a plain float-parseable form."""
+    s = re.sub(r"(?i)^\s*ngn\s*", "", raw)      # strip leading "NGN" before other chars
+    s = re.sub(r"[₦N$,\s]", "", s)              # strip currency symbols + commas + spaces
+    s = re.sub(r"(?i)\(?cr\)?$", "", s)         # trailing CR / (CR)
+    s = re.sub(r"(?i)dr$", "", s)               # trailing DR
+    if s.startswith("(") and s.endswith(")"):   # (1234.56) → 1234.56
+        s = s[1:-1]
+    if s.endswith("-"):                          # 1234.56- → 1234.56
+        s = s[:-1]
+    if s.startswith("-"):                        # strip leading minus (sign handled elsewhere)
+        s = s[1:]
+    return s
+
+
 def _is_number(v: str) -> bool:
-    s = re.sub(r"[₦,\s]", "", _clean(v))
-    s = re.sub(r"(?i)(dr|cr)$", "", s)
-    if not s or s in _NULL_VALS:
+    s = _strip_amount(_clean(v))
+    if not s or s.lower() in _NULL_VALS:
         return False
-    return bool(_NUMBER_RE.match(s))
+    try:
+        float(s)
+        return True
+    except (ValueError, TypeError):
+        return False
 
 
 def _to_float(v) -> float:
-    s = re.sub(r"[₦,\s]", "", _clean(v))
-    s = re.sub(r"(?i)(dr|cr)$", "", s)
+    s = _strip_amount(_clean(v))
     try:
         return abs(float(s))
     except (ValueError, TypeError):
@@ -96,15 +112,15 @@ def _to_float(v) -> float:
 def _amount_is_credit(raw: str) -> bool:
     """
     Return True when the raw cell value signals an incoming credit:
-      - ends with CR / (CR) suffix  → e.g. "5,000.00CR" or "5,000.00 (CR)"
-      - starts with a minus sign    → e.g. "-5000" (some banks negate credits)
-    Both conventions are used by different Nigerian banks.
+      • ends with CR / (CR) suffix
+      • starts with a minus sign (some banks negate credits)
+      • is a parenthetical negative (accounting format)
     """
     s = _clean(raw)
     if re.search(r"(?i)\(?cr\)?$", s):
         return True
-    stripped = re.sub(r"[₦,\s]", "", s)
-    if stripped.startswith("-"):
+    stripped = re.sub(r"[₦N$,\s]", "", s)
+    if stripped.startswith("-") or (stripped.startswith("(") and stripped.endswith(")")):
         return True
     return False
 
@@ -117,8 +133,7 @@ def _col_norm(col: str) -> str:
 def _kw_match(col: str, keywords: list[str]) -> bool:
     """
     True if any keyword is a whole-word substring of the normalised col name.
-    Short keywords (≤2 chars) must appear as standalone tokens to avoid
-    e.g. 'cr' matching inside 'description'.
+    Short keywords (≤2 chars) must appear as standalone tokens.
     """
     norm = _col_norm(col)
     for kw in keywords:
@@ -131,7 +146,7 @@ def _kw_match(col: str, keywords: list[str]) -> bool:
     return False
 
 
-# ── step 1 + 2 + 3: find the transaction section ────────────────────────────
+# ── step 1 + 2 + 3: find the transaction section ─────────────────────────────
 
 def _find_date_col_idx(raw: pd.DataFrame) -> int:
     """Return the column index with the most date-like values."""
@@ -156,9 +171,6 @@ def _find_best_header_row(raw: pd.DataFrame, first_data_row: int) -> int | None:
     """
     Among all rows BEFORE first_data_row, return the index of the one with
     the most distinct, non-date, non-number text tokens.
-
-    A full-column header ("Date | Narration | Debit | Credit | Balance")
-    scores higher than a 2-column metadata mini-header ("Credit(₦) | Value Date").
     """
     best_row, best_score = None, 0
 
@@ -170,7 +182,7 @@ def _find_best_header_row(raw: pd.DataFrame, first_data_row: int) -> int | None:
             and not _is_date(v)
             and not _is_number(v)
         ]
-        score = len(set(text_vals))   # unique non-date, non-number strings
+        score = len(set(text_vals))
         if score > best_score:
             best_score = score
             best_row = r
@@ -178,7 +190,7 @@ def _find_best_header_row(raw: pd.DataFrame, first_data_row: int) -> int | None:
     return best_row if best_score >= 1 else None
 
 
-# ── step 4: build the named dataframe ────────────────────────────────────────
+# ── step 4: build the named dataframe ─────────────────────────────────────────
 
 def _build_named_df(raw: pd.DataFrame, header_row: int | None,
                     first_data_row: int) -> pd.DataFrame:
@@ -197,7 +209,7 @@ def _build_named_df(raw: pd.DataFrame, header_row: int | None,
     return df.dropna(how="all").reset_index(drop=True)
 
 
-# ── step 5: detect column roles by content ───────────────────────────────────
+# ── step 5: detect column roles by content ────────────────────────────────────
 
 def _analyse_columns(df: pd.DataFrame) -> dict:
     """
@@ -219,46 +231,54 @@ def _analyse_columns(df: pd.DataFrame) -> dict:
         date_frac[col]   = sum(_is_date(v)   for v in non_null) / n
         number_frac[col] = sum(_is_number(v) for v in non_null) / n
 
-        # Text-richness: avg length of strings that are NOT dates and NOT numbers
         rich = [v for v in non_null
                 if not _is_date(v) and not _is_number(v) and len(v) >= _MIN_DESC_LEN]
-        # Multiply avg-len by uniqueness ratio to reward diverse narrations
         if rich:
-            avg_len     = sum(len(v) for v in rich) / len(rich)
-            uniqueness  = len(set(v.lower() for v in rich)) / len(rich)
+            avg_len    = sum(len(v) for v in rich) / len(rich)
+            uniqueness = len(set(v.lower() for v in rich)) / len(rich)
             text_score[col] = avg_len * uniqueness * len(rich) / n
         else:
             text_score[col] = 0.0
 
     assigned: set[str] = set()
 
-    # ── date column ──────────────────────────────────────────────────────────
-    # Pick the column with the highest fraction of date values.
-    # Prefer "date" or "trans_date" over "value_date" / "posting_date" as
-    # tie-breaker (the former is usually the transaction date).
+    # ── date column ───────────────────────────────────────────────────────────
     date_candidates = sorted(cols, key=lambda c: date_frac[c], reverse=True)
     date_col = None
     if date_candidates and date_frac[date_candidates[0]] >= 0.2:
-        # Among top-scoring date cols, prefer one named just "date"
         primary = [c for c in date_candidates
-                   if date_frac[c] >= 0.2 and _kw_match(c, ["date", "trans_date"])]
+                   if date_frac[c] >= 0.2 and _kw_match(c, ["date", "trans_date", "value_date"])]
         date_col = primary[0] if primary else date_candidates[0]
     assigned.add(date_col)
 
-    # ── amount columns ───────────────────────────────────────────────────────
-    # Find all columns with high numeric fraction (excluding the date column).
+    # ── amount columns ────────────────────────────────────────────────────────
+    # Exclude known balance columns — they have high number_frac but are not transaction amounts
+    balance_kw = ["balance", "bal", "closing", "running_bal", "ledger_bal", "avail"]
+
     num_cols = [
         c for c in cols
-        if c not in assigned and number_frac[c] >= 0.25
+        if c not in assigned and number_frac[c] >= 0.10
+        and not _kw_match(c, balance_kw)
     ]
+
+    # Fallback: if nothing met threshold, include balance-named cols too
+    if not num_cols:
+        num_cols = [c for c in cols if c not in assigned and number_frac[c] >= 0.05]
+
+    # Last resort: take the column with the highest numeric fraction
+    if not num_cols:
+        candidates = [(c, number_frac[c]) for c in cols if c not in assigned]
+        if candidates:
+            best_c, best_f = max(candidates, key=lambda x: x[1])
+            if best_f > 0:
+                num_cols = [best_c]
 
     debit_col = credit_col = amount_col = None
 
     if num_cols:
-        # Try to split into debit / credit by keyword
-        debit_kw  = ["debit", "withdrawal", "dr", "debit_amount"]
-        credit_kw = ["credit", "deposit", "credit_amount"]
-        amt_kw    = ["amount", "naira", "ngn", "transaction_amount"]
+        debit_kw  = ["debit", "withdrawal", "dr", "debit_amount", "outflow", "paid_out", "charge"]
+        credit_kw = ["credit", "deposit", "credit_amount", "inflow", "paid_in", "cr"]
+        amt_kw    = ["amount", "naira", "ngn", "transaction_amount", "trans_amount", "value"]
 
         for c in num_cols:
             if debit_col  is None and _kw_match(c, debit_kw):
@@ -268,41 +288,49 @@ def _analyse_columns(df: pd.DataFrame) -> dict:
             elif amount_col is None and _kw_match(c, amt_kw):
                 amount_col = c
 
-        # No keywords matched — use the numeric column with the highest non-zero rate
+        # No keywords matched — pick the best candidates
         if debit_col is None and credit_col is None and amount_col is None:
-            best_num = max(num_cols, key=lambda c: number_frac[c])
-            amount_col = best_num
+            if len(num_cols) == 1:
+                amount_col = num_cols[0]
+            else:
+                # Among multiple candidates, prefer columns with moderate density
+                # (balance columns are ~100% populated; debit/credit cols have gaps)
+                def _col_score(c: str) -> float:
+                    nf = number_frac[c]
+                    return nf if nf <= 0.90 else nf - 1.5   # penalise near-100% density
+
+                scored = sorted(num_cols, key=_col_score, reverse=True)
+                amount_col = scored[0]
+                # If two columns left with similar scores, treat as debit/credit split
+                if len(scored) >= 2 and _col_score(scored[1]) > 0.15:
+                    debit_col  = scored[0]
+                    credit_col = scored[1]
+                    amount_col = None
 
     for c in (debit_col, credit_col, amount_col):
         if c:
             assigned.add(c)
 
-    # ── narration / description column ───────────────────────────────────────
-    # Among columns NOT yet assigned, pick the one with the highest text_score.
-    # A keyword match is used as a tie-breaker, not a gate.
+    # ── narration / description column ────────────────────────────────────────
     narr_kw = ["narration", "description", "details", "particular",
                "memo", "remark", "transaction_detail", "trans_detail",
-               "narr", "desc", "transaction"]
+               "narr", "desc", "transaction", "remarks", "reference"]
 
     remaining = [c for c in cols if c not in assigned]
     narr_col  = None
 
     if remaining:
-        # Keyword-named column first (if its text_score is non-zero)
         for c in remaining:
             if _kw_match(c, narr_kw) and text_score.get(c, 0) > 0:
                 narr_col = c
                 break
 
-        # Otherwise pick by content score
         if narr_col is None:
             scored = [(c, text_score.get(c, 0)) for c in remaining]
             scored.sort(key=lambda x: x[1], reverse=True)
             if scored and scored[0][1] > 0:
                 narr_col = scored[0][0]
 
-        # Last resort: if all text_scores are 0 (e.g. file has only 2 columns),
-        # use whatever is not the date or amount col — even if it has dates.
         if narr_col is None and remaining:
             narr_col = remaining[0]
 
@@ -315,26 +343,53 @@ def _analyse_columns(df: pd.DataFrame) -> dict:
     }
 
 
-# ── step 6: read the raw file ────────────────────────────────────────────────
+# ── step 6: read the raw file ─────────────────────────────────────────────────
+
+def _cell_to_str(x) -> str:
+    """Convert any Excel cell value to a clean string."""
+    if x is None:
+        return ""
+    if isinstance(x, float):
+        if x != x:   # NaN
+            return ""
+        try:
+            i = int(x)
+            if float(i) == x:
+                return str(i)
+        except (OverflowError, ValueError):
+            pass
+        return str(x)
+    if isinstance(x, (_dt.datetime, _dt.date)):
+        return x.strftime("%d/%m/%Y")
+    if isinstance(x, bool):
+        return str(int(x))
+    if isinstance(x, int):
+        return str(x)
+    return str(x).strip()
+
 
 def _read_raw(content: bytes, filename: str) -> pd.DataFrame:
-    kw = dict(header=None, dtype=str)
     try:
         if filename.endswith(".csv"):
-            raw = pd.read_csv(BytesIO(content), **kw, on_bad_lines="skip")
+            raw = pd.read_csv(BytesIO(content), header=None, dtype=str, on_bad_lines="skip")
         else:
-            raw = pd.read_excel(BytesIO(content), **kw)
+            # Read Excel without dtype constraint so openpyxl preserves date/number types,
+            # then convert each cell to a clean string with _cell_to_str.
+            raw = pd.read_excel(BytesIO(content), header=None)
+            for col_i in raw.columns:
+                raw[col_i] = raw[col_i].apply(_cell_to_str)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Cannot read file: {exc}") from exc
     return raw.fillna("").astype(str)
 
 
-# ── route ────────────────────────────────────────────────────────────────────
+# ── route ─────────────────────────────────────────────────────────────────────
 
 @router.post("")
 async def upload_transactions(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     content  = await file.read()
     filename = (file.filename or "").lower()
@@ -346,7 +401,7 @@ async def upload_transactions(
     if raw.empty:
         raise HTTPException(status_code=400, detail="The file is empty.")
 
-    # ── locate the transaction section ───────────────────────────────────────
+    # ── locate the transaction section ────────────────────────────────────────
     date_col_idx   = _find_date_col_idx(raw)
     first_data_row = _find_first_data_row(raw, date_col_idx)
     header_row     = _find_best_header_row(raw, first_data_row)
@@ -365,47 +420,54 @@ async def upload_transactions(
                    "Ensure the file has Date, Description, and Amount columns.",
         )
 
-    # ── extract transactions ──────────────────────────────────────────────────
-    descriptions, amounts, dates, tx_types = [], [], [], []
+    # ── extract transactions (first pass) ─────────────────────────────────────
+    # Store (desc, date, row_dict) so nuclear fallback can access any column.
+    extracted: list[tuple[str, str, dict]] = []
 
     for _, row in df.iterrows():
-        # Description
         desc = _clean(row.get(cols["narr"], "") if cols["narr"] else "")
         if not desc or desc.lower() in _NULL_VALS:
             continue
         if len(desc) < _MIN_DESC_LEN:
             continue
-        # Skip OWealth internal fund movements — not real expenses or income
         if "owealth" in desc.lower():
             continue
-        # Skip rows where the narration column contains a column-header label
-        # (some bank exports repeat the header mid-table)
         if _kw_match(desc, ["narration", "description", "details", "particular",
                               "date", "debit", "credit", "balance", "reference"]):
-            if len(desc) < 12:   # short header word, not a real transaction
+            if len(desc) < 12:
                 continue
 
-        # Date
         dt = ""
         if cols["date"]:
             raw_dt = _clean(row.get(cols["date"], ""))
             dt = "" if raw_dt.lower() in _NULL_VALS else raw_dt
 
-        # Amount + transaction_type
-        # Priority: debit col → expense; credit col → income; amount col → multi-signal infer
-        amt = 0.0
+        extracted.append((desc, dt, dict(row)))
+
+    if not extracted:
+        raise HTTPException(
+            status_code=400,
+            detail="No valid transaction rows found. "
+                   "Please ensure your file has a narration/description column.",
+        )
+
+    # ── extract amounts ───────────────────────────────────────────────────────
+    amounts:  list[float] = []
+    tx_types: list[str]   = []
+
+    for desc, _dt_val, row in extracted:
+        amt     = 0.0
         tx_type = "debit"
 
         if cols["debit"]:
             raw_cell = str(row.get(cols["debit"], ""))
             v = _to_float(raw_cell)
             if v > 0:
-                # A value in the debit column with a CR suffix is actually income
-                amt = v
+                amt     = v
                 tx_type = "credit" if _amount_is_credit(raw_cell) else "debit"
 
         if amt == 0.0 and cols["credit"]:
-            v = _to_float(row.get(cols["credit"], ""))
+            v = _to_float(str(row.get(cols["credit"], "")))
             if v > 0:
                 amt, tx_type = v, "credit"
 
@@ -413,23 +475,43 @@ async def upload_transactions(
             raw_cell = str(row.get(cols["amount"], ""))
             v = _to_float(raw_cell)
             if v > 0:
-                amt = v
-                # Three independent signals — any one is enough to call it income
+                amt     = v
                 tx_type = "credit" if (
                     _amount_is_credit(raw_cell) or _INCOME_RE.search(desc)
                 ) else "debit"
 
-        descriptions.append(desc)
         amounts.append(amt)
-        dates.append(dt)
         tx_types.append(tx_type)
 
-    if not descriptions:
-        raise HTTPException(
-            status_code=400,
-            detail="No valid transaction rows found. "
-                   "Please ensure your file has a narration/description column.",
-        )
+    # ── nuclear fallback: if ALL amounts are 0 scan every other column ────────
+    if all(a == 0.0 for a in amounts):
+        used_cols = {c for c in [cols["date"], cols["narr"],
+                                  cols["debit"], cols["credit"], cols["amount"]] if c}
+        best_col   = None
+        best_count = 0
+
+        for fc in df.columns:
+            if fc in used_cols:
+                continue
+            nz = sum(1 for _, _, row in extracted if _to_float(str(row.get(fc, ""))) > 0)
+            if nz > best_count:
+                best_count = nz
+                best_col   = fc
+
+        if best_col and best_count > 0:
+            amounts   = []
+            tx_types  = []
+            for desc, _dt_val, row in extracted:
+                raw_cell = str(row.get(best_col, ""))
+                v        = _to_float(raw_cell)
+                amounts.append(v)
+                tx_types.append(
+                    "credit" if (_amount_is_credit(raw_cell) or _INCOME_RE.search(desc))
+                    else "debit"
+                )
+
+    descriptions = [e[0] for e in extracted]
+    dates        = [e[1] for e in extracted]
 
     # ── classify and save ─────────────────────────────────────────────────────
     classifications = classify_batch(descriptions)
@@ -437,6 +519,7 @@ async def upload_transactions(
 
     for desc, amt, dt, tx_type, clf in zip(descriptions, amounts, dates, tx_types, classifications):
         db.add(Transaction(
+            user_id=current_user.id,
             session_id=session_id,
             date=dt,
             description=desc,
@@ -456,9 +539,36 @@ async def upload_transactions(
         .all()
     )
 
+    # Build session summary
+    total_spend  = sum(t.amount for t in saved if t.transaction_type == "debit")
+    total_income = sum(t.amount for t in saved if t.transaction_type == "credit")
+    all_dates    = sorted([t.date for t in saved if t.date and t.date not in ("", "nan", "None")])
+    date_start   = all_dates[0]  if all_dates else None
+    date_end     = all_dates[-1] if all_dates else None
+
+    cat_totals: dict[str, float] = {}
+    for t in saved:
+        if t.transaction_type == "debit":
+            cat = t.corrected_category if t.is_corrected else t.predicted_category
+            cat_totals[cat] = cat_totals.get(cat, 0.0) + (t.amount or 0.0)
+    top_cat = max(cat_totals, key=lambda k: cat_totals[k]) if cat_totals else None
+
+    db.add(UploadSession(
+        user_id=current_user.id,
+        session_id=session_id,
+        filename=file.filename or "unknown",
+        total_transactions=len(saved),
+        total_spend=round(total_spend, 2),
+        total_income=round(total_income, 2),
+        date_range_start=date_start,
+        date_range_end=date_end,
+        top_category=top_cat,
+    ))
+    db.commit()
+
     return {
-        "session_id": session_id,
-        "total": len(saved),
+        "session_id":   session_id,
+        "total":        len(saved),
         "transactions": [_tx_to_dict(t) for t in saved],
     }
 

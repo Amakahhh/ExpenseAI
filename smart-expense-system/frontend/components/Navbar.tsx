@@ -1,6 +1,8 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { getAuthUser, clearToken } from "@/lib/api";
 
 const NAV = [
   { href: "/dashboard",    label: "Dashboard"    },
@@ -10,6 +12,17 @@ const NAV = [
 
 export default function Navbar() {
   const path = usePathname();
+  const router = useRouter();
+  const [user, setUser] = useState<{ email: string; name: string } | null>(null);
+
+  useEffect(() => {
+    setUser(getAuthUser());
+  }, [path]);
+
+  function handleLogout() {
+    clearToken();
+    router.push("/login");
+  }
 
   return (
     <nav
@@ -67,11 +80,30 @@ export default function Navbar() {
           })}
         </div>
 
-        {/* Status dot */}
-        <div className="flex items-center gap-2 text-xs font-mono" style={{ color: "#6B6B8A" }}>
-          <span className="w-1.5 h-1.5 rounded-full animate-glow-pulse inline-block"
-            style={{ background: "#00E5A0" }} />
-          System online
+        {/* User + logout */}
+        <div className="flex items-center gap-3">
+          {user && (
+            <span className="text-xs font-mono hidden sm:block" style={{ color: "#6B6B8A" }}>
+              {user.name || user.email}
+            </span>
+          )}
+          {user ? (
+            <button
+              onClick={handleLogout}
+              className="text-xs font-mono px-3 py-1.5 rounded-lg border transition-all duration-200 hover:border-red-500/40 hover:text-red-400"
+              style={{ color: "#6B6B8A", borderColor: "rgba(108,99,255,0.2)" }}
+            >
+              Sign out
+            </button>
+          ) : (
+            <Link
+              href="/login"
+              className="text-xs font-mono px-3 py-1.5 rounded-lg border transition-all"
+              style={{ color: "#6C63FF", borderColor: "rgba(108,99,255,0.3)" }}
+            >
+              Sign in
+            </Link>
+          )}
         </div>
       </div>
     </nav>
