@@ -5,15 +5,17 @@ import Sidebar from "@/components/Sidebar";
 import MonthlyChart from "@/components/MonthlyChart";
 import CategoryChart from "@/components/CategoryChart";
 import TransactionTable from "@/components/TransactionTable";
-import { getAnalytics, getTransactions, getToken, getActiveSessionId, Analytics, Transaction } from "@/lib/api";
+import { getAnalytics, getTransactions, getToken, getActiveSessionId, getAuthUser, Analytics, Transaction } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
 function fmtNaira(n: number) {
   return "₦" + (n ?? 0).toLocaleString("en-NG", { minimumFractionDigits: 2 });
 }
-function greeting() {
+function greeting(name?: string) {
   const h = new Date().getHours();
-  return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+  const base = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+  const first = name?.trim().split(" ")[0];
+  return first ? `${base}, ${first}` : base;
 }
 function Skel({ h = 100, r = 8 }: { h?: number; r?: number }) {
   return <div className="skeleton" style={{ height: h, borderRadius: r }} />;
@@ -24,6 +26,7 @@ export default function DashboardPage() {
   const [data,  setData]  = useState<Analytics | null>(null);
   const [txs,   setTxs]   = useState<Transaction[]>([]);
   const [ready, setReady] = useState(false);
+  const userName = getAuthUser()?.name ?? "";
 
   useEffect(() => {
     if (!getToken()) { router.replace("/login"); return; }
@@ -59,7 +62,7 @@ export default function DashboardPage() {
           <>
             {/* Greeting */}
             <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 6, fontFamily: "var(--font-display, 'Plus Jakarta Sans', sans-serif)", letterSpacing: "0.02em" }}>
-              {greeting()}
+              {greeting(userName)}
             </p>
 
             {/* Hero number */}
