@@ -37,12 +37,20 @@ from models.database import get_db, Transaction, UploadSession, User
 from routes.auth import get_current_user
 from services.classifier import classify_batch
 
-# PDF support — imported lazily so missing package gives a clear error at upload time
+# PDF support: PyMuPDF (preferred) with pdfplumber as fallback
+try:
+    import fitz as _fitz          # PyMuPDF ≥ 1.23 — has page.find_tables()
+    _PYMUPDF_AVAILABLE = True
+except ImportError:
+    _PYMUPDF_AVAILABLE = False
+
 try:
     import pdfplumber as _pdfplumber
-    _PDF_AVAILABLE = True
+    _PDFPLUMBER_AVAILABLE = True
 except ImportError:
-    _PDF_AVAILABLE = False
+    _PDFPLUMBER_AVAILABLE = False
+
+_PDF_AVAILABLE = _PYMUPDF_AVAILABLE or _PDFPLUMBER_AVAILABLE
 
 router = APIRouter()
 
@@ -377,66 +385,47 @@ def _cell_to_str(x) -> str:
 
 # ── PDF helpers ───────────────────────────────────────────────────────────────
 
-def _pdf_is_encrypted(content: bytes) -> bool:
-    """Return True if the PDF byte stream contains an /Encrypt dictionary entry."""
-    return b"/Encrypt" in content
+def _rows_to_df(rows: list[list[str]]) -> pd.DataFrame:
+    max_cols = max(len(r) for r in rows)
+    padded   = [r + [""] * (max_cols - len(r)) for r in rows]
+    return pd.DataFrame(padded).fillna("").astype(str)
 
 
-def _pdf_tables_to_rows(pdf) -> list[list[str]]:
-    """
-    Try three extraction strategies in order of reliability and return
-    the first that yields non-empty structured rows.
-    """
-    strategies = [
-        {},                                                                    # pdfplumber auto
-        {"vertical_strategy": "lines",   "horizontal_strategy": "lines"},    # bordered tables
-        {"vertical_strategy": "text",    "horizontal_strategy": "text"},      # text-aligned cols
-    ]
-    for settings in strategies:
-        all_rows: list[list[str]] = []
-        for page in pdf.pages:
-            try:
-                tables = page.extract_tables(settings)
-                for table in (tables or []):
-                    for row in table:
-                        cleaned = [str(c).strip() if c else "" for c in row]
-                        if any(cleaned):
-                            all_rows.append(cleaned)
-            except Exception:
-                continue
-        if all_rows:
-            return all_rows
-    return []
+# ── PyMuPDF extraction (primary) ──────────────────────────────────────────────
 
-
-def _pdf_words_to_rows(pdf) -> list[list[str]]:
-    """
-    Fall back: extract individual words with bounding boxes, cluster them
-    into lines and columns, and reconstruct a table-like row list.
-    """
-    all_words: list[dict] = []
-    for page in pdf.pages:
+def _pymupdf_tables(doc) -> list[list[str]]:
+    """Use PyMuPDF page.find_tables() — the most accurate method for structured PDFs."""
+    all_rows: list[list[str]] = []
+    for page in doc:
         try:
-            words = page.extract_words(x_tolerance=5, y_tolerance=5)
-            for w in words:
-                all_words.append({
-                    "text": w["text"],
-                    "x0":   w["x0"],
-                    "top":  w["top"],
-                    "page": page.page_number,
-                })
+            for tab in page.find_tables():
+                for row in tab.extract():
+                    cleaned = [str(cell or "").strip() for cell in row]
+                    if any(cleaned):
+                        all_rows.append(cleaned)
+        except Exception:
+            continue
+    return all_rows
+
+
+def _pymupdf_words(doc) -> list[list[str]]:
+    """Word-position column reconstruction using PyMuPDF — fallback for borderless PDFs."""
+    all_words: list[dict] = []
+    for page in doc:
+        try:
+            # get_text("words") → (x0,y0,x1,y1,text,block,line,word_no)
+            for w in page.get_text("words"):
+                all_words.append({"text": w[4], "x0": w[0], "top": w[1], "page": page.number})
         except Exception:
             continue
 
     if not all_words:
         return []
 
-    # Sort by page → vertical position → horizontal position
     all_words.sort(key=lambda w: (w["page"], round(w["top"]), w["x0"]))
 
-    # Cluster into lines (words within 6 pt vertically on the same page)
     lines: list[list[dict]] = []
-    cur:   list[dict]        = [all_words[0]]
+    cur: list[dict] = [all_words[0]]
     for w in all_words[1:]:
         if w["page"] == cur[0]["page"] and abs(w["top"] - cur[0]["top"]) <= 6:
             cur.append(w)
@@ -446,15 +435,14 @@ def _pdf_words_to_rows(pdf) -> list[list[str]]:
     if cur:
         lines.append(cur)
 
-    # Detect column boundaries by clustering all x0 values (gap > 18 pt = new col)
+    # Detect column starts: x0 gap > 15 pt = new column
     x0s = sorted(w["x0"] for w in all_words)
     col_starts = [x0s[0]] if x0s else []
     for x in x0s[1:]:
-        if x - col_starts[-1] > 18:
+        if x - col_starts[-1] > 15:
             col_starts.append(x)
 
     if len(col_starts) < 2:
-        # Cannot detect columns — return each line as a single-cell row
         return [[" ".join(w["text"] for w in line)] for line in lines]
 
     def _col_idx(x0: float) -> int:
@@ -472,48 +460,31 @@ def _pdf_words_to_rows(pdf) -> list[list[str]]:
     return rows
 
 
-def _read_pdf(content: bytes, password: str = "") -> pd.DataFrame:
-    """Open a PDF and extract its transaction table as a raw DataFrame."""
-    if not _PDF_AVAILABLE:
-        raise HTTPException(
-            status_code=400,
-            detail="PDF support is not available on this server. Please upload a CSV or Excel file.",
-        )
-
+def _pymupdf_rawtext(doc) -> list[list[str]]:
+    """Last resort: extract plain text lines from every page."""
     rows: list[list[str]] = []
+    for page in doc:
+        try:
+            for line in (page.get_text("text") or "").splitlines():
+                if line.strip():
+                    rows.append([line.strip()])
+        except Exception:
+            continue
+    return rows
 
+
+def _read_pdf_pymupdf(content: bytes, password: str) -> pd.DataFrame:
     try:
-        with _pdfplumber.open(BytesIO(content), password=password or "") as pdf:
-            # Strategy 1/2/3: table extraction with multiple rule-sets
-            rows = _pdf_tables_to_rows(pdf)
+        doc = _fitz.open(stream=content, filetype="pdf")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Cannot open PDF: {e}")
 
-            # Strategy 4: word-position column reconstruction
-            if not rows:
-                rows = _pdf_words_to_rows(pdf)
-
-            # Strategy 5: raw text lines (last resort)
-            if not rows:
-                for page in pdf.pages:
-                    try:
-                        text = page.extract_text() or ""
-                        for line in text.splitlines():
-                            if line.strip():
-                                rows.append([line.strip()])
-                    except Exception:
-                        continue
-
-    except HTTPException:
-        raise
-    except Exception:
-        # pdfplumber raises PdfminerException with an empty message for both
-        # wrong-password and corrupt-file errors.  Distinguish them by checking
-        # whether the PDF byte stream actually contains an encryption dictionary.
-        if _pdf_is_encrypted(content):
+    if doc.is_encrypted:
+        if not doc.authenticate(password or ""):
             raise HTTPException(status_code=422, detail="PDF_NEEDS_PASSWORD")
-        raise HTTPException(
-            status_code=400,
-            detail="Could not read this PDF. The file may be corrupt or in an unsupported format.",
-        )
+
+    rows = _pymupdf_tables(doc) or _pymupdf_words(doc) or _pymupdf_rawtext(doc)
+    doc.close()
 
     if not rows:
         raise HTTPException(
@@ -521,11 +492,114 @@ def _read_pdf(content: bytes, password: str = "") -> pd.DataFrame:
             detail="No readable content found in this PDF. "
                    "Scanned / image-based PDFs are not supported.",
         )
+    return _rows_to_df(rows)
 
-    # Pad all rows to the same width and convert to DataFrame
-    max_cols = max(len(r) for r in rows)
-    padded   = [r + [""] * (max_cols - len(r)) for r in rows]
-    return pd.DataFrame(padded).fillna("").astype(str)
+
+# ── pdfplumber extraction (fallback) ─────────────────────────────────────────
+
+def _pdf_is_encrypted(content: bytes) -> bool:
+    return b"/Encrypt" in content
+
+
+def _plumber_tables(pdf) -> list[list[str]]:
+    for settings in [
+        {},
+        {"vertical_strategy": "lines",  "horizontal_strategy": "lines"},
+        {"vertical_strategy": "text",   "horizontal_strategy": "text"},
+    ]:
+        rows: list[list[str]] = []
+        for page in pdf.pages:
+            try:
+                for table in (page.extract_tables(settings) or []):
+                    for row in table:
+                        cleaned = [str(c).strip() if c else "" for c in row]
+                        if any(cleaned):
+                            rows.append(cleaned)
+            except Exception:
+                continue
+        if rows:
+            return rows
+    return []
+
+
+def _plumber_words(pdf) -> list[list[str]]:
+    all_words: list[dict] = []
+    for page in pdf.pages:
+        try:
+            for w in page.extract_words(x_tolerance=5, y_tolerance=5):
+                all_words.append({"text": w["text"], "x0": w["x0"],
+                                   "top": w["top"], "page": page.page_number})
+        except Exception:
+            continue
+    if not all_words:
+        return []
+    all_words.sort(key=lambda w: (w["page"], round(w["top"]), w["x0"]))
+    lines: list[list[dict]] = []
+    cur: list[dict] = [all_words[0]]
+    for w in all_words[1:]:
+        if w["page"] == cur[0]["page"] and abs(w["top"] - cur[0]["top"]) <= 6:
+            cur.append(w)
+        else:
+            lines.append(cur)
+            cur = [w]
+    if cur:
+        lines.append(cur)
+    x0s = sorted(w["x0"] for w in all_words)
+    col_starts = [x0s[0]] if x0s else []
+    for x in x0s[1:]:
+        if x - col_starts[-1] > 18:
+            col_starts.append(x)
+    if len(col_starts) < 2:
+        return [[" ".join(w["text"] for w in line)] for line in lines]
+    def _ci(x0: float) -> int:
+        return min(range(len(col_starts)), key=lambda i: abs(col_starts[i] - x0))
+    rows: list[list[str]] = []
+    for line in lines:
+        row = [""] * len(col_starts)
+        for w in line:
+            i = _ci(w["x0"])
+            row[i] = (row[i] + " " + w["text"]).strip()
+        if any(row):
+            rows.append(row)
+    return rows
+
+
+def _read_pdf_plumber(content: bytes, password: str) -> pd.DataFrame:
+    try:
+        with _pdfplumber.open(BytesIO(content), password=password or "") as pdf:
+            rows = _plumber_tables(pdf)
+            if not rows:
+                rows = _plumber_words(pdf)
+            if not rows:
+                for page in pdf.pages:
+                    try:
+                        for line in (page.extract_text() or "").splitlines():
+                            if line.strip():
+                                rows.append([line.strip()])
+                    except Exception:
+                        continue
+    except HTTPException:
+        raise
+    except Exception:
+        if _pdf_is_encrypted(content):
+            raise HTTPException(status_code=422, detail="PDF_NEEDS_PASSWORD")
+        raise HTTPException(status_code=400,
+                            detail="Could not read this PDF. The file may be corrupt.")
+    if not rows:
+        raise HTTPException(status_code=400,
+                            detail="No readable content found in this PDF.")
+    return _rows_to_df(rows)
+
+
+def _read_pdf(content: bytes, password: str = "") -> pd.DataFrame:
+    if not _PDF_AVAILABLE:
+        raise HTTPException(
+            status_code=400,
+            detail="PDF support is not available on this server. Please upload a CSV or Excel file.",
+        )
+    if _PYMUPDF_AVAILABLE:
+        return _read_pdf_pymupdf(content, password)
+    return _read_pdf_plumber(content, password)
 
 
 def _read_raw(content: bytes, filename: str, password: str = "") -> pd.DataFrame:
