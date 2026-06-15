@@ -40,11 +40,9 @@ from services.classifier import classify_batch
 # PDF support — imported lazily so missing package gives a clear error at upload time
 try:
     import pdfplumber as _pdfplumber
-    from pdfminer.pdfdocument import PDFPasswordIncorrect as _PDFPasswordIncorrect
     _PDF_AVAILABLE = True
 except ImportError:
     _PDF_AVAILABLE = False
-    _PDFPasswordIncorrect = None
 
 router = APIRouter()
 
@@ -379,12 +377,15 @@ def _cell_to_str(x) -> str:
 
 # ── PDF helpers ───────────────────────────────────────────────────────────────
 
-def _is_pdf_password_error(exc: Exception) -> bool:
-    if _PDFPasswordIncorrect and isinstance(exc, _PDFPasswordIncorrect):
-        return True
-    name = type(exc).__name__.lower()
-    msg  = str(exc).lower()
-    return "password" in name or "password" in msg or "encrypt" in msg or "decrypt" in msg
+def _pdf_is_encrypted(content: bytes) -> bool:
+    """
+    Quick heuristic: check if the PDF byte stream contains an /Encrypt dictionary.
+    Encrypted PDFs always have this entry in their cross-reference catalog.
+    We search the first 8 KB and last 4 KB — that covers the catalog for virtually
+    all real-world PDFs regardless of size.
+    """
+    sample = content[:8192] + (content[-4096:] if len(content) > 12288 else b"")
+    return b"/Encrypt" in sample
 
 
 def _pdf_tables_to_rows(pdf) -> list[list[str]]:
@@ -485,17 +486,11 @@ def _read_pdf(content: bytes, password: str = "") -> pd.DataFrame:
             detail="PDF support is not available on this server. Please upload a CSV or Excel file.",
         )
 
-    # Open — raises PDFPasswordIncorrect when password is wrong / missing
-    try:
-        pdf_file = _pdfplumber.open(BytesIO(content), password=password or "")
-    except Exception as exc:
-        if _is_pdf_password_error(exc):
-            raise HTTPException(status_code=422, detail="PDF_NEEDS_PASSWORD")
-        raise HTTPException(status_code=400, detail=f"Cannot open PDF: {exc}") from exc
+    rows: list[list[str]] = []
 
     try:
-        with pdf_file as pdf:
-            # Strategy 1 & 2 & 3: table extraction with three rule-sets
+        with _pdfplumber.open(BytesIO(content), password=password or "") as pdf:
+            # Strategy 1/2/3: table extraction with multiple rule-sets
             rows = _pdf_tables_to_rows(pdf)
 
             # Strategy 4: word-position column reconstruction
@@ -515,10 +510,16 @@ def _read_pdf(content: bytes, password: str = "") -> pd.DataFrame:
 
     except HTTPException:
         raise
-    except Exception as exc:
-        if _is_pdf_password_error(exc):
+    except Exception:
+        # pdfplumber raises PdfminerException with an empty message for both
+        # wrong-password and corrupt-file errors.  Distinguish them by checking
+        # whether the PDF byte stream actually contains an encryption dictionary.
+        if _pdf_is_encrypted(content):
             raise HTTPException(status_code=422, detail="PDF_NEEDS_PASSWORD")
-        raise HTTPException(status_code=400, detail=f"Cannot read PDF: {exc}") from exc
+        raise HTTPException(
+            status_code=400,
+            detail="Could not read this PDF. The file may be corrupt or in an unsupported format.",
+        )
 
     if not rows:
         raise HTTPException(
