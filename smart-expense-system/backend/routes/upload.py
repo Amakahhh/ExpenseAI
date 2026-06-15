@@ -54,14 +54,16 @@ try:
     import pytesseract as _pytesseract
     from PIL import Image as _PILImage
     import io as _io
-    # On Windows, Tesseract is often installed but not added to PATH.
-    # Point pytesseract at the default install location if the binary is there.
     import os as _os
+    # Windows: Tesseract is often installed but not on PATH
     _WIN_TESS = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
     if _os.name == "nt" and _os.path.exists(_WIN_TESS):
         _pytesseract.pytesseract.tesseract_cmd = _WIN_TESS
+    # Verify the binary is actually reachable — catches "installed but not in PATH"
+    # on any platform so we never crash at request time.
+    _pytesseract.get_tesseract_version()
     _OCR_AVAILABLE = True
-except ImportError:
+except Exception:
     _OCR_AVAILABLE = False
 
 _PDF_AVAILABLE = _PDFPLUMBER_AVAILABLE or _PYMUPDF_AVAILABLE
