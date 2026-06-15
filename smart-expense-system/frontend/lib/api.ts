@@ -2,6 +2,14 @@
 // never contacts Render directly — no CORS needed.
 const BASE_URL = "/backend";
 
+// Thrown when the uploaded PDF is password-protected and no (or wrong) password was given.
+export class PDFPasswordError extends Error {
+  constructor() {
+    super("PDF_NEEDS_PASSWORD");
+    this.name = "PDFPasswordError";
+  }
+}
+
 // ─── Auth token helpers ───────────────────────────────────────────────────────
 
 export function getToken(): string | null {
@@ -137,9 +145,10 @@ export interface SessionComparison {
 
 // ─── API Functions ───────────────────────────────────────────────────────────
 
-export async function uploadFile(file: File): Promise<UploadResponse> {
+export async function uploadFile(file: File, pdfPassword?: string): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
+  if (pdfPassword) form.append("pdf_password", pdfPassword);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 180_000); // 3 min — covers Render cold start
@@ -153,7 +162,11 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error((err as any).detail || "Upload failed.");
+      const detail = (err as any).detail;
+      if (res.status === 422 && detail === "PDF_NEEDS_PASSWORD") {
+        throw new PDFPasswordError();
+      }
+      throw new Error(detail || "Upload failed.");
     }
     return res.json();
   } catch (err: any) {
