@@ -37,7 +37,7 @@ from models.database import get_db, Transaction, UploadSession, User
 from routes.auth import get_current_user
 from services.classifier import classify_batch
 
-# PDF support: pdfplumber (primary) → PyMuPDF (fallback)
+# PDF support: pdfplumber → PyMuPDF → Tesseract OCR
 try:
     import pdfplumber as _pdfplumber
     _PDFPLUMBER_AVAILABLE = True
@@ -45,10 +45,24 @@ except ImportError:
     _PDFPLUMBER_AVAILABLE = False
 
 try:
-    import fitz as _fitz          # PyMuPDF ≥ 1.23
+    import fitz as _fitz          # PyMuPDF ≥ 1.23 — also used for OCR rendering
     _PYMUPDF_AVAILABLE = True
 except ImportError:
     _PYMUPDF_AVAILABLE = False
+
+try:
+    import pytesseract as _pytesseract
+    from PIL import Image as _PILImage
+    import io as _io
+    # On Windows, Tesseract is often installed but not added to PATH.
+    # Point pytesseract at the default install location if the binary is there.
+    import os as _os
+    _WIN_TESS = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    if _os.name == "nt" and _os.path.exists(_WIN_TESS):
+        _pytesseract.pytesseract.tesseract_cmd = _WIN_TESS
+    _OCR_AVAILABLE = True
+except ImportError:
+    _OCR_AVAILABLE = False
 
 _PDF_AVAILABLE = _PDFPLUMBER_AVAILABLE or _PYMUPDF_AVAILABLE
 
@@ -467,6 +481,199 @@ def _words_to_rows(words: list[dict]) -> list[list[str]]:
     return rows
 
 
+# ── OPay-specific extractor ──────────────────────────────────────────────────
+#
+# OPay PDFs use a fixed 8-column layout with known x-boundaries (in points).
+# Descriptions wrap across multiple lines and references split onto a second
+# line, so generic table extraction misses most rows.  We use word bounding
+# boxes instead: assign each word to a column by x-midpoint, snap y-values
+# to a 4 pt grid to group lines, find transaction anchors by their date-time
+# pattern, then collect every word in the transaction's vertical band.
+
+_OPAY_COLS: dict[str, tuple[float, float]] = {
+    "Trans Time":          (60,  130),
+    "Value Date":          (130, 178),
+    "Description":         (178, 305),
+    "Debit (NGN)":         (295, 342),
+    "Credit (NGN)":        (332, 385),
+    "Balance After (NGN)": (375, 425),
+    "Channel":             (415, 478),
+    "Transaction Ref":     (468, 600),
+}
+
+# Matches "01 Dec 2025 14:30:00" — the date-time format in OPay's Trans Time column
+_OPAY_TIME_RE = re.compile(r"\d{2}\s+\w{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}")
+
+
+def _opay_word_col(x_mid: float) -> str | None:
+    """Return the column name for a word's x-midpoint, or None if out of range."""
+    for col_name, (lo, hi) in _OPAY_COLS.items():
+        if lo <= x_mid <= hi:
+            return col_name
+    return None
+
+
+def _opay_from_words(pages_words: list[list[dict]]) -> list[list[str]]:
+    """
+    Core OPay extraction logic.  Takes a list of per-page word lists where
+    each word is {text, x0, x1, top} — works with pdfplumber, PyMuPDF, or OCR.
+    Returns [] when no OPay date-time pattern is detected (not an OPay PDF).
+    """
+    all_txns: list[dict] = []
+
+    for words in pages_words:
+        if not words:
+            continue
+
+        # Tag each word with its snapped y-row and column slot
+        for w in words:
+            w["_y"]    = round(w["top"] / 4) * 4
+            w["_xmid"] = (w["x0"] + w["x1"]) / 2
+            w["_col"]  = _opay_word_col(w["_xmid"])
+
+        # Group by snapped y
+        y_groups: dict[int, list] = {}
+        for w in words:
+            y_groups.setdefault(w["_y"], []).append(w)
+
+        # Find transaction anchor rows (Trans Time column contains a datetime)
+        tx_ys: list[int] = []
+        for y in sorted(y_groups):
+            time_words = [w for w in y_groups[y] if w["_col"] == "Trans Time"]
+            time_text  = " ".join(w["text"] for w in sorted(time_words, key=lambda x: x["x0"]))
+            if _OPAY_TIME_RE.search(time_text):
+                tx_ys.append(y)
+
+        if not tx_ys:
+            continue
+
+        all_ys = sorted(y_groups)
+
+        for i, tx_y in enumerate(tx_ys):
+            next_tx_y = tx_ys[i + 1] if i + 1 < len(tx_ys) else float("inf")
+
+            band: list[dict] = [
+                w
+                for y in all_ys if tx_y <= y < next_tx_y
+                for w in y_groups[y]
+            ]
+
+            tx: dict[str, str] = {}
+            for col_name in _OPAY_COLS:
+                col_words = sorted(
+                    [w for w in band if w["_col"] == col_name],
+                    key=lambda w: (w["top"], w["x0"]),
+                )
+                text = " ".join(w["text"] for w in col_words).strip()
+                if text == "--" and col_name in ("Debit (NGN)", "Credit (NGN)"):
+                    text = ""
+                if col_name == "Transaction Ref":
+                    text = text.replace(" ", "")
+                tx[col_name] = text
+
+            all_txns.append(tx)
+
+    if not all_txns:
+        return []
+
+    col_names = list(_OPAY_COLS.keys())
+    return [col_names] + [[tx.get(c, "") for c in col_names] for tx in all_txns]
+
+
+def _opay_extract(pdf) -> list[list[str]]:
+    """pdfplumber wrapper: pull words from each page then run _opay_from_words."""
+    pages_words = []
+    for page in pdf.pages:
+        raw = page.extract_words(x_tolerance=3, y_tolerance=3) or []
+        pages_words.append([
+            {"text": w["text"], "x0": w["x0"], "x1": w["x1"], "top": w["top"]}
+            for w in raw
+        ])
+    return _opay_from_words(pages_words)
+
+
+# ── OCR extraction (Tesseract fallback) ──────────────────────────────────────
+#
+# When pdfplumber fails (unusual text encoding, non-standard layout), we render
+# each PDF page to a high-resolution image via PyMuPDF then run Tesseract OCR
+# to get word bounding boxes.  Digital bank-statement PDFs render perfectly so
+# OCR accuracy is near-100 %.  This path handles OPay and any other bank.
+
+def _ocr_page_words(fitz_page, scale: float = 2.5) -> list[dict]:
+    """
+    Render one PyMuPDF page at `scale`× zoom and run Tesseract word detection.
+    Returns [{text, x0, x1, top}] in original PDF-point coordinates.
+    """
+    mat = _fitz.Matrix(scale, scale)
+    pix = fitz_page.get_pixmap(matrix=mat)
+    img = _PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+    data = _pytesseract.image_to_data(
+        img,
+        output_type=_pytesseract.Output.DICT,
+        config="--psm 6",          # assume uniform text block per page
+    )
+
+    words: list[dict] = []
+    for i, text in enumerate(data["text"]):
+        text = (text or "").strip()
+        if not text:
+            continue
+        conf = int(data["conf"][i])
+        if conf < 20:              # discard very low-confidence tokens
+            continue
+        x  = data["left"][i]  / scale
+        y  = data["top"][i]   / scale
+        w  = data["width"][i] / scale
+        words.append({"text": text, "x0": x, "x1": x + w, "top": y})
+    return words
+
+
+def _read_pdf_ocr(content: bytes, password: str) -> pd.DataFrame:
+    """
+    OCR-based fallback: renders each page to an image then reads words with
+    Tesseract.  Requires PyMuPDF (for rendering) and pytesseract + Tesseract
+    binary to be installed.
+    """
+    if not _PYMUPDF_AVAILABLE:
+        raise HTTPException(status_code=500,
+                            detail="OCR requires PyMuPDF (pip install pymupdf).")
+    if not _OCR_AVAILABLE:
+        raise HTTPException(status_code=500,
+                            detail="OCR requires pytesseract (pip install pytesseract) "
+                                   "and the Tesseract binary.")
+
+    try:
+        doc = _fitz.open(stream=content, filetype="pdf")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Cannot open PDF: {e}")
+
+    if doc.is_encrypted:
+        if not doc.authenticate(password or ""):
+            raise HTTPException(status_code=422, detail="PDF_NEEDS_PASSWORD")
+
+    pages_words: list[list[dict]] = []
+    for page in doc:
+        pages_words.append(_ocr_page_words(page))
+    doc.close()
+
+    # Try OPay-specific extraction first
+    rows = _opay_from_words(pages_words)
+
+    if not rows:
+        # Generic: flatten all page words and detect columns dynamically
+        all_words = [w for pw in pages_words for w in pw]
+        rows = _words_to_rows(all_words)
+
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail="OCR found no readable text. "
+                   "The PDF may be a scanned image with poor quality.",
+        )
+    return _rows_to_df(rows)
+
+
 # ── pdfplumber extraction (primary) ──────────────────────────────────────────
 
 def _plumber_page_rows(page) -> list[list[str]]:
@@ -517,9 +724,14 @@ def _read_pdf_pdfplumber(content: bytes, password: str) -> pd.DataFrame:
     encrypted = _pdf_is_encrypted(content)
     try:
         with _pdfplumber.open(BytesIO(content), password=password or "") as pdf:
-            all_rows: list[list[str]] = []
-            for page in pdf.pages:
-                all_rows.extend(_plumber_page_rows(page))
+            # Try OPay-specific extraction first; it returns [] for non-OPay PDFs
+            all_rows = _opay_extract(pdf)
+
+            if not all_rows:
+                # Generic extraction for Wema, GTB, Access, UBA, etc.
+                all_rows = []
+                for page in pdf.pages:
+                    all_rows.extend(_plumber_page_rows(page))
     except HTTPException:
         raise
     except Exception:
@@ -601,16 +813,65 @@ def _read_pdf_pymupdf(content: bytes, password: str) -> pd.DataFrame:
 
 # ── dispatcher ────────────────────────────────────────────────────────────────
 
+_PDF_MIN_ROWS = 10   # fewer rows than this after text extraction → try OCR
+
+
 def _read_pdf(content: bytes, password: str = "") -> pd.DataFrame:
+    """
+    Three-tier PDF extraction cascade:
+      1. pdfplumber  — best for most digital bank statements; has OPay-specific path
+      2. PyMuPDF     — different text engine, catches what pdfplumber misses
+      3. Tesseract OCR — renders each page to an image and reads it pixel-perfect;
+                         handles any encoding; slowest but most robust
+
+    Password errors are always propagated immediately (never silently swallowed).
+    If a method returns fewer than _PDF_MIN_ROWS rows it is considered a partial
+    failure and the next method is tried.
+    """
     if not _PDF_AVAILABLE:
         raise HTTPException(
             status_code=400,
-            detail="PDF support is not available on this server. "
-                   "Please upload a CSV or Excel file.",
+            detail="PDF support is not available. Please upload a CSV or Excel file.",
         )
+
+    last_exc: Exception | None = None
+
+    # ── tier 1: pdfplumber ────────────────────────────────────────────────────
     if _PDFPLUMBER_AVAILABLE:
-        return _read_pdf_pdfplumber(content, password)
-    return _read_pdf_pymupdf(content, password)
+        try:
+            df = _read_pdf_pdfplumber(content, password)
+            if len(df) >= _PDF_MIN_ROWS:
+                return df
+        except HTTPException as exc:
+            if exc.detail == "PDF_NEEDS_PASSWORD":
+                raise
+            last_exc = exc
+        except Exception as exc:
+            last_exc = exc
+
+    # ── tier 2: PyMuPDF ──────────────────────────────────────────────────────
+    if _PYMUPDF_AVAILABLE:
+        try:
+            df = _read_pdf_pymupdf(content, password)
+            if len(df) >= _PDF_MIN_ROWS:
+                return df
+        except HTTPException as exc:
+            if exc.detail == "PDF_NEEDS_PASSWORD":
+                raise
+            last_exc = exc
+        except Exception as exc:
+            last_exc = exc
+
+    # ── tier 3: Tesseract OCR ─────────────────────────────────────────────────
+    if _OCR_AVAILABLE and _PYMUPDF_AVAILABLE:
+        return _read_pdf_ocr(content, password)
+
+    # All tiers failed
+    raise last_exc or HTTPException(
+        status_code=400,
+        detail="Could not extract text from this PDF. "
+               "Install pytesseract + Tesseract to enable OCR fallback.",
+    )
 
 
 def _read_raw(content: bytes, filename: str, password: str = "") -> pd.DataFrame:
