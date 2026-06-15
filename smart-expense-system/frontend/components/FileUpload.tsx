@@ -1,9 +1,9 @@
 "use client";
 import { useState, useCallback, useRef, DragEvent, ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
-import { uploadFile, saveStoredSession, setActiveSessionId, PDFPasswordError } from "@/lib/api";
+import { uploadFile, saveStoredSession, setActiveSessionId } from "@/lib/api";
 
-type Phase = "idle" | "dragging" | "uploading" | "needs_password" | "done";
+type Phase = "idle" | "dragging" | "pdf_ready" | "uploading" | "done";
 
 function UploadIcon() {
   return (
@@ -14,12 +14,13 @@ function UploadIcon() {
   );
 }
 
-function LockIcon() {
+function PdfIcon() {
   return (
-    <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-      <rect x="3" y="11" width="18" height="11" rx="2" stroke="var(--accent)" strokeWidth="1.6" />
-      <path d="M7 11V7a5 5 0 0110 0v4" stroke="var(--accent)" strokeWidth="1.6" strokeLinecap="round" />
-      <circle cx="12" cy="16" r="1.5" fill="var(--accent)" />
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M14 2v6h6" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9 13h1.5a1 1 0 010 2H9v-4h1.5a1 1 0 010 2" stroke="var(--accent)" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M14 11h1a2 2 0 010 4h-1v-4z" stroke="var(--accent)" strokeWidth="1.2" strokeLinecap="round" />
     </svg>
   );
 }
@@ -36,6 +37,7 @@ export default function FileUpload() {
   const router   = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Run the actual upload — called either directly (CSV/Excel) or after password entry (PDF)
   const runUpload = useCallback(async (file: File, password?: string) => {
     setError(null);
     setPwError(null);
@@ -67,89 +69,114 @@ export default function FileUpload() {
       router.push("/dashboard");
     } catch (err: any) {
       clearInterval(ticker);
-      if (err instanceof PDFPasswordError) {
-        // PDF is password-protected — store file and ask for password
-        setPendingFile(file);
-        setPdfPassword("");
-        setPhase("needs_password");
-      } else if (phase === "needs_password" || password !== undefined) {
-        // Wrong password was entered
+      const msg: string = err.message || "";
+
+      // Backend explicitly says password is needed or wrong
+      if (msg === "PDF_NEEDS_PASSWORD" || msg.toLowerCase().includes("password")) {
         setPwError("Incorrect password. Please try again.");
-        setPhase("needs_password");
-      } else {
-        setError(err.message || "Upload failed. Please check your file.");
-        setPhase("idle");
+        setPhase("pdf_ready");
+        return;
       }
+
+      setError(msg || "Upload failed. Please check your file.");
+      setPhase("idle");
     }
-  }, [router, phase]);
+  }, [router]);
+
+  // Called when any file is chosen — PDFs get a pre-upload password screen
+  const handleFile = useCallback((file: File) => {
+    setError(null);
+    setPwError(null);
+    setPdfPassword("");
+    setFilename(file.name);
+    setPendingFile(file);
+
+    if (file.name.toLowerCase().endsWith(".pdf")) {
+      setPhase("pdf_ready");   // show password field first
+    } else {
+      runUpload(file);         // CSV/Excel: upload immediately
+    }
+  }, [runUpload]);
 
   const onDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setPhase("idle");
     const file = e.dataTransfer.files[0];
-    if (file) runUpload(file);
-  }, [runUpload]);
+    if (file) handleFile(file);
+  }, [handleFile]);
 
   const onChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) runUpload(file);
-    // Reset input so the same file can be re-selected if needed
+    if (file) handleFile(file);
     e.target.value = "";
-  }, [runUpload]);
+  }, [handleFile]);
 
-  // ── Password prompt ────────────────────────────────────────────────────────
-  if (phase === "needs_password") {
+  // ── PDF password screen ───────────────────────────────────────────────────
+  if (phase === "pdf_ready") {
     return (
-      <div style={{ padding: "8px 0" }}>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, marginBottom: 20 }}>
-          <LockIcon />
-          <div style={{ textAlign: "center" }}>
-            <p style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)", marginBottom: 4 }}>
-              Password-protected PDF
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        {/* File badge */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 12,
+          padding: "12px 14px",
+          background: "rgba(192,122,16,0.07)",
+          border: "1px solid rgba(192,122,16,0.2)",
+          borderRadius: 10,
+        }}>
+          <PdfIcon />
+          <div style={{ minWidth: 0 }}>
+            <p style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {filename}
             </p>
-            <p style={{ fontSize: 12, color: "var(--muted)" }}>
-              Enter the password your bank set for this statement.
-            </p>
+            <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>PDF selected</p>
           </div>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {/* Password field */}
+        <div>
+          <label style={{
+            display: "block", fontSize: 11, fontWeight: 700,
+            letterSpacing: "0.08em", textTransform: "uppercase",
+            color: "var(--muted)", marginBottom: 8,
+          }}>
+            Password <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>(leave blank if not protected)</span>
+          </label>
           <input
             type="password"
             autoFocus
-            placeholder="Statement password"
+            placeholder="Enter PDF password"
             value={pdfPassword}
             onChange={(e) => { setPwError(null); setPdfPassword(e.target.value); }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && pendingFile) runUpload(pendingFile, pdfPassword);
+              if (e.key === "Enter" && pendingFile) runUpload(pendingFile, pdfPassword || undefined);
             }}
             className="input-field"
           />
-
-          {pwError && <p className="error-box">{pwError}</p>}
-
-          <button
-            className="btn-primary"
-            style={{ width: "100%" }}
-            disabled={!pdfPassword.trim()}
-            onClick={() => pendingFile && runUpload(pendingFile, pdfPassword)}
-          >
-            Unlock &amp; Upload
-          </button>
-
-          <button
-            className="btn-ghost"
-            style={{ width: "100%", fontSize: 12 }}
-            onClick={() => { setPhase("idle"); setPendingFile(null); setPdfPassword(""); setPwError(null); }}
-          >
-            Cancel — choose a different file
-          </button>
+          {pwError && (
+            <p className="error-box" style={{ marginTop: 8 }}>{pwError}</p>
+          )}
         </div>
+
+        {/* Actions */}
+        <button
+          className="btn-primary"
+          style={{ width: "100%" }}
+          onClick={() => pendingFile && runUpload(pendingFile, pdfPassword || undefined)}
+        >
+          Upload Statement
+        </button>
+        <button
+          className="btn-ghost"
+          style={{ width: "100%", fontSize: 12 }}
+          onClick={() => { setPhase("idle"); setPendingFile(null); setPdfPassword(""); setPwError(null); setFilename(""); }}
+        >
+          Choose a different file
+        </button>
       </div>
     );
   }
 
-  // ── Upload progress ────────────────────────────────────────────────────────
+  // ── Uploading / done ──────────────────────────────────────────────────────
   if (phase === "uploading" || phase === "done") {
     return (
       <div style={{ padding: "12px 0" }}>
@@ -171,7 +198,7 @@ export default function FileUpload() {
     );
   }
 
-  // ── Idle / drag ────────────────────────────────────────────────────────────
+  // ── Idle / drag ───────────────────────────────────────────────────────────
   return (
     <>
       <div

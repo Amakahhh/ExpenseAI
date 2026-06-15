@@ -378,14 +378,8 @@ def _cell_to_str(x) -> str:
 # ── PDF helpers ───────────────────────────────────────────────────────────────
 
 def _pdf_is_encrypted(content: bytes) -> bool:
-    """
-    Quick heuristic: check if the PDF byte stream contains an /Encrypt dictionary.
-    Encrypted PDFs always have this entry in their cross-reference catalog.
-    We search the first 8 KB and last 4 KB — that covers the catalog for virtually
-    all real-world PDFs regardless of size.
-    """
-    sample = content[:8192] + (content[-4096:] if len(content) > 12288 else b"")
-    return b"/Encrypt" in sample
+    """Return True if the PDF byte stream contains an /Encrypt dictionary entry."""
+    return b"/Encrypt" in content
 
 
 def _pdf_tables_to_rows(pdf) -> list[list[str]]:
