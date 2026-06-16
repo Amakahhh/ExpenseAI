@@ -160,6 +160,18 @@ TEST_DATA = [
     ("ONLINE SHOPPING", "shopping"),
     ("ELECTRONICS PURCHASE", "shopping"),
 
+    # memo extraction cases (the key insight — purpose at end of transfer description)
+    ("Transfer to OGECHUKWU PRECIOUS OKIKA | OPay | 9067451387 | For cake", "food"),
+    ("Sent to JOHN DOE | GTBank | 0801234567 | For fuel", "transport"),
+    ("Transfer to JANE | PalmPay | 0901234567 | For school fees", "education"),
+    ("Transfer to MIKE | Kuda | 0712345678 | Netflix subscription", "entertainment"),
+    ("Transfer to MRS ADEOLA | Opay | 0813456789 | For hospital bill", "health"),
+    ("Transfer to EMEKA | 0705432198 | For rent", "bills"),
+    ("Sent to BLESSING | OPay | 0901234567 | Clothing shopping", "shopping"),
+    ("Transfer to DAVID | Access | 0811234567 | For lunch", "food"),
+    ("Transfer to CHUKWU | GTB | 0701234567 | For drugs", "health"),
+    ("Sent to MAMA | OPay | 08012345 | Feeding money", "food"),
+
     # other
     ("NIP TRANSFER TO ACCESS BANK", "other"),
     ("INTERBANK TRANSFER ZENITH BANK", "other"),

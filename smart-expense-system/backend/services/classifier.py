@@ -1,11 +1,22 @@
 """
-Nigerian bank transaction classifier – 3-pass approach.
+Nigerian bank transaction classifier – 4-pass approach.
 
-  1. Brand lookup  — known merchant/brand substrings → category (longest match first)
-  2. Phrase match  — curated descriptive phrases → category
-  3. Token scoring — accumulate per-word evidence; pick highest-scored category
+Nigerian transfer descriptions often encode the real intent at the END, e.g.:
+  "Transfer to OGECHUKWU PRECIOUS | OPay | 9067451387 | For cake"
+                                                        ^^^^^^^^
+                                           this is the signal that matters
+
+Pipeline:
+  0. Memo extraction  — pull the human-written purpose from the end of the text
+  1. Brand lookup     — known merchant/brand substrings → category (longest match first)
+  2. Phrase match     — curated descriptive phrases → category
+  3. Token scoring    — accumulate per-word evidence; pick highest-scored category
+  4. AI fallback      — Claude Haiku for descriptions that survive all keyword passes
+                        as "other" yet contain a meaningful human memo.
+                        Only runs if ANTHROPIC_API_KEY is set in the environment.
 """
 
+import os
 import re
 from collections import defaultdict
 
@@ -14,8 +25,84 @@ CATEGORIES = [
     "health", "education", "shopping", "other",
 ]
 
-# ── Pass 1: brand / merchant name lookup ──────────────────────────────────────
-# Sorted longest-first so "jumia food" beats "jumia", "bolt food" beats "bolt", etc.
+# ─────────────────────────────────────────────────────────────────────────────
+# Pass 0 — Memo extraction
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MEMO_STRIP = re.compile(
+    r'^\s*(?:for\s+|re[:\s]+|memo[:\s]+|note[:\s]+|purpose[:\s]+|narration[:\s]+)',
+    re.IGNORECASE,
+)
+
+_PHONE_RE = re.compile(r'^[\+]?[\d][\d\s\-]{7,14}$')
+
+# Bank / wallet names that appear as pipe-segments but carry no category signal.
+_BANK_TOKENS = frozenset({
+    "gtb", "gtbank", "access", "zenith", "uba", "fcmb", "stanbic", "sterling",
+    "union", "heritage", "wema", "opay", "palmpay", "moniepoint", "kuda",
+    "fidelity", "firstbank", "first bank", "ecobank", "polaris", "vfd",
+    "providus", "jaiz", "lotus", "paystack", "flutterwave",
+})
+
+
+def _extract_memo(raw: str) -> str:
+    """
+    Return the human-written reason/purpose embedded in a bank description,
+    or the full text if no structured memo is found.
+
+    Examples
+    --------
+    "Transfer to JOHN DOE | OPay | 0812345678 | For cake"  →  "cake"
+    "Sent to JANE/rent payment"                             →  "rent payment"
+    "Payment for school fees today"                         →  "school fees today"
+    "POS SHOPRITE MARYLAND"                                 →  (unchanged)
+    """
+    text = raw.strip()
+
+    # ── Pipe-delimited (OPay / PalmPay / Moniepoint / direct bank transfers) ──
+    if '|' in text:
+        parts = [p.strip() for p in text.split('|')]
+        for part in reversed(parts):
+            if not part:
+                continue
+            if _PHONE_RE.match(part):
+                continue
+            candidate = _MEMO_STRIP.sub('', part).strip()
+            if len(candidate) <= 2:
+                continue
+            if candidate.lower() in _BANK_TOKENS:
+                continue
+            # If the whole part is just a personal name (ALL CAPS words only),
+            # skip — we want the purpose, not the recipient's name.
+            if re.fullmatch(r'[A-Z][A-Z\s]+', candidate):
+                continue
+            return candidate
+
+    # ── Slash-delimited (some NIP/NEFT descriptions) ──────────────────────────
+    if text.count('/') >= 2:
+        parts = [p.strip() for p in text.split('/')]
+        for part in reversed(parts):
+            candidate = _MEMO_STRIP.sub('', part).strip()
+            if len(candidate) < 3:
+                continue
+            if _PHONE_RE.match(part) or re.match(r'^\d{6,}$', candidate):
+                continue
+            return candidate
+
+    # ── Inline "for X" anywhere in the text ──────────────────────────────────
+    m = re.search(r'\bfor\s+(.{3,60})$', text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    return text  # no structured memo — use the full description
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pass 1 — Brand / merchant name lookup
+# ─────────────────────────────────────────────────────────────────────────────
+# Sorted longest-first so "jumia food" matches before "jumia",
+# "bolt food" matches before "bolt", etc.
+
 _BRANDS: list[tuple[str, str]] = sorted([
     # ── food ──────────────────────────────────────────────────────────────────
     ("the place restaurant",    "food"),
@@ -62,6 +149,7 @@ _BRANDS: list[tuple[str, str]] = sorted([
     ("young shall grow",        "transport"),
     ("filling station",         "transport"),
     ("petrol station",          "transport"),
+    ("fuel station",            "transport"),
     ("total filling",           "transport"),
     ("total petrol",            "transport"),
     ("total fuel",              "transport"),
@@ -206,7 +294,10 @@ _BRANDS: list[tuple[str, str]] = sorted([
 ], key=lambda pair: -len(pair[0]))
 
 
-# ── Pass 2: descriptive phrase match (substring) ──────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Pass 2 — Phrase match (substring)
+# ─────────────────────────────────────────────────────────────────────────────
+
 _PHRASES: dict[str, list[str]] = {
     "food": [
         "food court", "food store", "food mart", "food hub", "food delivery",
@@ -219,11 +310,20 @@ _PHRASES: dict[str, list[str]] = {
         "local restaurant", "snack bar", "chops bar",
         "fish market", "meat market", "foodstuff market", "foodstuff",
         "farm fresh", "morning fresh", "green basket",
+        # colloquial memo words people type in transfers
+        "buy food", "for food", "food money",
+        "lunch money", "dinner money", "breakfast money",
+        "buy cake", "for cake", "cake money",
+        "buy snacks", "for snacks",
+        "buy groceries", "for groceries",
+        "buy drinks", "for drinks",
+        "chop money", "feeding money", "feeding allowance",
     ],
     "transport": [
         "bolt ride", "bolt trip", "bolt car",
-        "fuel station", "fuel purchase", "petrol purchase", "diesel purchase",
-        "fuel top up", "fuel topup",
+        "fuel purchase", "petrol purchase", "diesel purchase",
+        "fuel top up", "fuel topup", "buy fuel", "buy petrol", "for fuel", "for petrol",
+        "fuel money", "transport fare", "bus fare", "transport money",
         "flight ticket", "airline ticket", "bus ticket", "interstate transport",
         "motor park", "highway transport",
         "car hire", "vehicle hire", "car rental",
@@ -232,7 +332,8 @@ _PHRASES: dict[str, list[str]] = {
         "auto mechanic", "car wash", "vehicle service",
         "spare part", "auto parts", "engine oil",
         "tyre purchase", "vehicle registration",
-        "transport fare", "bus fare",
+        "for transport", "for fare", "for uber", "for bolt",
+        "for ticket", "flight money",
     ],
     "entertainment": [
         "sports betting", "bet deposit", "bet withdrawal",
@@ -240,6 +341,8 @@ _PHRASES: dict[str, list[str]] = {
         "event ticket", "amusement park", "karaoke",
         "xbox game", "steam game", "game subscription",
         "youtube subscription", "streaming subscription",
+        "for bet", "for betting", "betting money",
+        "for movie", "for cinema",
     ],
     "bills": [
         "electricity token", "prepaid token", "power token", "meter token",
@@ -248,12 +351,12 @@ _PHRASES: dict[str, list[str]] = {
         "prepaid meter", "postpaid bill", "utility bill",
         "internet subscription", "broadband subscription", "wifi subscription",
         "internet data", "data bundle", "data plan", "data subscription", "data purchase",
-        "mtn airtime", "airtel airtime", "glo airtime", "9mobile airtime", "etisalat airtime",
+        "mtn airtime", "airtel airtime", "glo airtime", "9mobile airtime",
         "airtime recharge", "airtime purchase", "airtime topup", "airtime top up",
         "vtu airtime", "airtime vtu", "airtime transfer",
         "mtn data", "airtel data", "glo data", "9mobile data",
         "mtn subscription", "airtel subscription", "glo subscription",
-        "cable tv", "cable subscription", "cable tv subscription",
+        "cable tv", "cable subscription",
         "water bill", "water rate", "water board",
         "house rent", "monthly rent", "annual rent", "rent payment",
         "service charge", "estate levy", "facility management",
@@ -261,6 +364,11 @@ _PHRASES: dict[str, list[str]] = {
         "insurance premium", "life insurance", "car insurance", "hmo premium",
         "health insurance", "hmo subscription",
         "waste management", "sanitation levy",
+        # colloquial memo words
+        "for rent", "for light", "for electricity", "for airtime",
+        "for data", "for internet", "for cable", "buy airtime",
+        "for dstv", "for gotv",
+        "light bill money", "rent money",
     ],
     "health": [
         "pharmacy store", "drug store", "chemist",
@@ -279,6 +387,10 @@ _PHRASES: dict[str, list[str]] = {
         "vaccination", "immunization", "antenatal",
         "mental health", "counseling session",
         "doctor consultation", "medical consultation", "hospital bill",
+        # colloquial memo words
+        "for hospital", "for drugs", "for medicine", "for treatment",
+        "for doctor", "for clinic", "for injection", "hospital money",
+        "drug money", "medical money",
     ],
     "education": [
         "jamb registration", "jamb payment", "jamb utme",
@@ -294,6 +406,10 @@ _PHRASES: dict[str, list[str]] = {
         "training workshop", "seminar fee", "conference registration",
         "coaching class", "tutorial fee", "lesson payment", "vocational training",
         "study abroad", "ielts registration", "toefl exam",
+        # colloquial memo words
+        "for school", "school money", "for tuition", "for lesson",
+        "for exam", "for jamb", "for waec", "for books", "book money",
+        "for course", "for training",
     ],
     "shopping": [
         "online shopping", "online store", "online purchase",
@@ -306,6 +422,10 @@ _PHRASES: dict[str, list[str]] = {
         "retail store", "department store",
         "gift purchase", "souvenir", "merchandise",
         "boutique fashion",
+        # colloquial memo words
+        "for shopping", "for clothes", "for shoes", "for bag",
+        "for phone", "for laptop", "for makeup", "for hair",
+        "shopping money", "market money",
     ],
     "other": [
         "interbank transfer", "nip transfer", "neft transfer",
@@ -319,9 +439,10 @@ _PHRASES: dict[str, list[str]] = {
     ],
 }
 
-# ── Pass 3: scored token lookup ───────────────────────────────────────────────
-# Score = how strongly the word signals the category (0–1).
-# Classifier accumulates scores and picks the winner if total >= 0.60.
+# ─────────────────────────────────────────────────────────────────────────────
+# Pass 3 — Token scoring
+# ─────────────────────────────────────────────────────────────────────────────
+
 _SCORES: dict[str, dict[str, float]] = {
     "food": {
         "food": 0.80, "restaurant": 0.90, "eatery": 0.90, "cafeteria": 0.85,
@@ -329,9 +450,14 @@ _SCORES: dict[str, dict[str, float]] = {
         "foodstuff": 0.90, "provisions": 0.75, "bakery": 0.85,
         "shawarma": 0.95, "sharwarma": 0.95, "suya": 0.95,
         "pizza": 0.80, "burger": 0.80, "chicken": 0.55, "snack": 0.65,
+        "snacks": 0.65, "cake": 0.80, "cakes": 0.80,
+        "lunch": 0.80, "dinner": 0.80, "breakfast": 0.80,
         "cafe": 0.70, "supermarket": 0.80, "buka": 0.90, "chops": 0.70,
         "smoothie": 0.80, "pastry": 0.80, "confectionery": 0.85,
         "shoprite": 0.95, "spar": 0.90, "kfc": 0.95, "dominos": 0.95,
+        "drinks": 0.65, "drink": 0.55, "beer": 0.65, "wine": 0.65,
+        "rice": 0.70, "beans": 0.70, "stew": 0.70, "pepper": 0.60,
+        "feeding": 0.80, "chop": 0.75,
     },
     "transport": {
         "uber": 0.95, "bolt": 0.80, "taxify": 0.95, "indriver": 0.95,
@@ -343,6 +469,8 @@ _SCORES: dict[str, dict[str, float]] = {
         "parking": 0.80, "toll": 0.80, "tollgate": 0.90,
         "mechanic": 0.85, "tyre": 0.85, "tyres": 0.85,
         "transport": 0.70, "logistics": 0.60,
+        "fare": 0.75, "ride": 0.70, "trip": 0.65, "ticket": 0.70,
+        "bus": 0.65, "taxi": 0.75, "motor": 0.60,
     },
     "entertainment": {
         "netflix": 0.99, "showmax": 0.99, "spotify": 0.99, "boomplay": 0.99,
@@ -350,9 +478,10 @@ _SCORES: dict[str, dict[str, float]] = {
         "bet9ja": 0.99, "sportybet": 0.99, "nairabet": 0.99,
         "betway": 0.99, "1xbet": 0.99, "betking": 0.99, "bangbet": 0.99,
         "cinema": 0.90, "silverbird": 0.95, "filmhouse": 0.95,
-        "playstation": 0.95, "gaming": 0.85, "betting": 0.85,
-        "entertainment": 0.80, "streaming": 0.80, "betting": 0.90,
-        "casino": 0.90, "lottery": 0.85,
+        "playstation": 0.95, "gaming": 0.85, "betting": 0.90,
+        "entertainment": 0.80, "streaming": 0.80,
+        "casino": 0.90, "lottery": 0.85, "movie": 0.80, "movies": 0.80,
+        "bet": 0.75, "wager": 0.85, "odds": 0.75,
     },
     "bills": {
         "ekedc": 0.99, "ikedc": 0.99, "phed": 0.99, "aedc": 0.99,
@@ -365,7 +494,7 @@ _SCORES: dict[str, dict[str, float]] = {
         "utility": 0.75, "token": 0.70, "recharge": 0.75,
         "prepaid": 0.70, "postpaid": 0.75, "bill": 0.65,
         "subscription": 0.55, "insurance": 0.65, "premium": 0.55,
-        "cable": 0.70, "wifi": 0.75,
+        "cable": 0.70, "wifi": 0.75, "light": 0.60, "nepa": 0.85,
     },
     "health": {
         "pharmacy": 0.95, "pharmacist": 0.95, "chemist": 0.90, "dispensary": 0.90,
@@ -376,6 +505,8 @@ _SCORES: dict[str, dict[str, float]] = {
         "vaccine": 0.90, "vaccination": 0.90, "surgery": 0.90,
         "scan": 0.70, "ultrasound": 0.90, "mri": 0.90,
         "health": 0.60, "wellness": 0.70, "gym": 0.65, "fitness": 0.70,
+        "injection": 0.85, "treatment": 0.75, "therapy": 0.80,
+        "lab": 0.70, "test": 0.55, "checkup": 0.80, "consultation": 0.75,
     },
     "education": {
         "jamb": 0.99, "waec": 0.99, "neco": 0.99, "nabteb": 0.99,
@@ -386,6 +517,8 @@ _SCORES: dict[str, dict[str, float]] = {
         "education": 0.80, "exam": 0.70, "admission": 0.80,
         "training": 0.65, "seminar": 0.80, "certification": 0.80,
         "lesson": 0.80, "academy": 0.80, "institute": 0.65,
+        "books": 0.75, "stationery": 0.80, "lecture": 0.80,
+        "hostel": 0.75, "fees": 0.70,
     },
     "shopping": {
         "jumia": 0.99, "konga": 0.99, "jiji": 0.95,
@@ -397,10 +530,12 @@ _SCORES: dict[str, dict[str, float]] = {
         "mall": 0.65, "shopping": 0.70, "retail": 0.70,
         "furniture": 0.80, "appliance": 0.80, "gadget": 0.80,
         "electronics": 0.75, "accessories": 0.70,
+        "clothes": 0.85, "shoes": 0.85, "bag": 0.75, "bags": 0.75,
+        "phone": 0.70, "laptop": 0.80, "wristwatch": 0.80, "watch": 0.65,
+        "hair": 0.65, "wig": 0.80, "weave": 0.80,
     },
 }
 
-# Strip these common filler words before token scoring so they don't dilute signals.
 _NOISE = frozenset({
     "via", "to", "from", "at", "by", "for", "the", "and", "or",
     "of", "a", "an", "on", "in", "with", "per", "rev", "ref",
@@ -411,42 +546,36 @@ _NOISE = frozenset({
     "ng", "ltd", "plc", "nig", "nigeria", "limited",
     "jan", "feb", "mar", "apr", "may", "jun",
     "jul", "aug", "sep", "oct", "nov", "dec",
-    # common Nigerian bank channels / prefixes that carry no category signal
     "gtb", "gtbank", "access", "zenith", "uba", "fcmb", "stanbic",
     "sterling", "union", "heritage", "wema", "opay", "palmpay",
     "moniepoint", "kuda",
 })
 
-# Split on whitespace, slashes, hyphens, underscores, punctuation, and asterisks
 _TOKEN_SPLIT = re.compile(r"[\s/\-_,\.;:@#\(\)\[\]\*\+\&]+")
 
-_SCORE_THRESHOLD = 0.60   # minimum accumulated score to accept a category
+_SCORE_THRESHOLD = 0.60
 
 
 def _tokens(text: str) -> list[str]:
     return [t for t in _TOKEN_SPLIT.split(text.lower()) if t and t not in _NOISE]
 
 
-def classify_transaction(description: str) -> dict:
-    text = (description or "").lower().strip()
-    if not text:
-        return {"category": "other", "confidence": 0.45}
-
-    # ── Pass 1: brand lookup (longest match first prevents false partial hits) ─
+def _classify_text(text: str) -> dict:
+    """Apply brand → phrase → token-score passes to a single text string."""
+    # Pass 1: brand lookup
     for brand, category in _BRANDS:
         if brand in text:
             return {"category": category, "confidence": 0.92}
 
-    # ── Pass 2: phrase match ──────────────────────────────────────────────────
+    # Pass 2: phrase match
     for category, phrases in _PHRASES.items():
         for phrase in phrases:
             if phrase in text:
                 return {"category": category, "confidence": 0.88}
 
-    # ── Pass 3: token scoring ────────────────────────────────────────────────
-    toks = _tokens(text)
+    # Pass 3: token scoring
     cat_scores: dict[str, float] = defaultdict(float)
-    for tok in toks:
+    for tok in _tokens(text):
         for cat, word_map in _SCORES.items():
             if tok in word_map:
                 cat_scores[cat] += word_map[tok]
@@ -455,11 +584,105 @@ def classify_transaction(description: str) -> dict:
         best = max(cat_scores, key=cat_scores.__getitem__)
         score = cat_scores[best]
         if score >= _SCORE_THRESHOLD:
-            # Normalise score to a confidence in 0.65–0.88
             confidence = round(min(0.88, 0.65 + score * 0.15), 2)
             return {"category": best, "confidence": confidence}
 
     return {"category": "other", "confidence": 0.45}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pass 4 — Claude Haiku AI fallback
+# ─────────────────────────────────────────────────────────────────────────────
+# Only active when ANTHROPIC_API_KEY is set.  Used for memos that survive all
+# keyword passes as "other" yet are clearly human-written purpose descriptions.
+
+_AI_SYSTEM = (
+    "You are a Nigerian bank transaction classifier. "
+    "Given a short memo or transaction description, output EXACTLY ONE word from:\n"
+    "food, transport, entertainment, bills, health, education, shopping, other\n\n"
+    "Rules:\n"
+    "- food: anything edible — restaurants, groceries, cakes, drinks, market food\n"
+    "- transport: fuel/petrol, Uber/Bolt rides, flights, bus tickets, car repairs\n"
+    "- entertainment: betting, cinema, Netflix/Spotify/streaming, gaming\n"
+    "- bills: electricity tokens, airtime/data, rent, DSTV/GOTV, water, insurance\n"
+    "- health: pharmacy/drugs, hospital/clinic, doctor, gym membership\n"
+    "- education: school fees, JAMB/WAEC, online courses, tutoring, books\n"
+    "- shopping: Jumia/Konga/online shops, clothing, shoes, electronics, beauty\n"
+    "- other: peer transfers with no stated purpose, bank charges, salary\n\n"
+    "Output only the category word, nothing else."
+)
+
+_ai_client = None
+_AI_AVAILABLE = False
+
+
+def _get_ai_client():
+    global _ai_client, _AI_AVAILABLE
+    if _ai_client is not None:
+        return _ai_client
+    key = os.getenv("ANTHROPIC_API_KEY")
+    if not key:
+        return None
+    try:
+        import anthropic
+        _ai_client = anthropic.Anthropic(api_key=key)
+        _AI_AVAILABLE = True
+        return _ai_client
+    except Exception:
+        return None
+
+
+def _classify_with_ai(memo: str) -> dict:
+    client = _get_ai_client()
+    if not client:
+        return {"category": "other", "confidence": 0.45}
+    try:
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=10,
+            system=_AI_SYSTEM,
+            messages=[{"role": "user", "content": f'"{memo}"'}],
+        )
+        category = msg.content[0].text.strip().lower().split()[0]
+        if category in CATEGORIES:
+            return {"category": category, "confidence": 0.85}
+    except Exception:
+        pass
+    return {"category": "other", "confidence": 0.45}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public API
+# ─────────────────────────────────────────────────────────────────────────────
+
+def classify_transaction(description: str) -> dict:
+    text = (description or "").lower().strip()
+    if not text:
+        return {"category": "other", "confidence": 0.45}
+
+    # Extract the human-written purpose from the end of the description.
+    # e.g. "Transfer to JOHN | OPay | 0801234 | For cake"  →  "cake"
+    memo = _extract_memo(text)
+    memo_lower = memo.lower()
+
+    # Classify the memo first — it's the most specific human signal.
+    if memo_lower != text:
+        result = _classify_text(memo_lower)
+        if result["category"] != "other":
+            return result
+
+    # Classify the full description.
+    result = _classify_text(text)
+
+    # AI fallback: if we extracted a meaningful memo but keywords found nothing,
+    # let Claude Haiku interpret natural language ("cake", "mama's food", etc.)
+    if (result["category"] == "other"
+            and memo_lower != text
+            and len(memo) >= 3
+            and os.getenv("ANTHROPIC_API_KEY")):
+        return _classify_with_ai(memo)
+
+    return result
 
 
 def classify_batch(descriptions: list) -> list:
@@ -467,5 +690,4 @@ def classify_batch(descriptions: list) -> list:
 
 
 def update_prototype(category: str, description: str) -> None:
-    # No-op: keyword classifier has no learnable parameters.
     pass
