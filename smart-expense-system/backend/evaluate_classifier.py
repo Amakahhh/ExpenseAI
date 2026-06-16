@@ -163,6 +163,18 @@ TEST_DATA = [
     ("ONLINE SHOPPING", "shopping"),
     ("ELECTRONICS PURCHASE", "shopping"),
 
+    # newly added Nigerian-specific memo words
+    ("Transfer to ADE | OPay | 0812345678 | For cardboard", "education"),
+    ("For egusi soup", "food"),
+    ("Transfer to MAMA | GTB | 0801234567 | buy indomie", "food"),
+    ("Transfer to JAMES | OPay | 0901234567 | for malaria drugs", "health"),
+    ("Transfer to NIKE | PalmPay | 0701234567 | ankara fabric", "shopping"),
+    ("Transfer to CHIDI | OPay | 0811234567 | school handout", "education"),
+    ("Sent to AMOS | Kuda | 0901234567 | waybill money", "transport"),
+    ("Transfer to GRACE | OPay | 0812345678 | for biro and notebook", "education"),
+    ("Transfer to SARAH | GTB | 0811234567 | for manicure", "shopping"),
+    ("Transfer to EMEKA | OPay | 0901234567 | For pounded yam", "food"),
+
     # memo extraction cases (the key insight — purpose at end of transfer description)
     ("Transfer to OGECHUKWU PRECIOUS OKIKA | OPay | 9067451387 | For cake", "food"),
     ("Sent to JOHN DOE | GTBank | 0801234567 | For fuel", "transport"),
