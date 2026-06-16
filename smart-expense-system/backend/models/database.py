@@ -5,7 +5,9 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 import os
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./expense_data.db")
+_raw_url = os.getenv("DATABASE_URL", "sqlite:///./expense_data.db")
+# Render provides postgres:// but SQLAlchemy 2.x requires postgresql://
+DATABASE_URL = _raw_url.replace("postgres://", "postgresql://", 1)
 
 engine = create_engine(
     DATABASE_URL,
