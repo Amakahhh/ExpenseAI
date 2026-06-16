@@ -21,7 +21,7 @@ import re
 from collections import defaultdict
 
 CATEGORIES = [
-    "food", "transport", "entertainment", "bills",
+    "food", "transport", "entertainment", "utilities", "bills",
     "health", "education", "shopping", "other",
 ]
 
@@ -36,12 +36,21 @@ _MEMO_STRIP = re.compile(
 
 _PHONE_RE = re.compile(r'^[\+]?[\d][\d\s\-]{7,14}$')
 
+# Segments that look like data sizes, amounts, or references — not useful memos.
+_SKIP_SEGMENT_RE = re.compile(
+    r'^(\d+(?:\.\d+)?(?:gb|mb|kb|tb)?'   # data sizes: 25GB, 1.5GB, 500MB
+    r'|\d+(?:ngn|naira|k|m)?'             # amounts: 500, 1000NGN, 5k
+    r'|[a-z0-9]{12,}'                     # long reference codes (12+ chars)
+    r')$',
+    re.IGNORECASE,
+)
+
 # Bank / wallet names that appear as pipe-segments but carry no category signal.
 _BANK_TOKENS = frozenset({
     "gtb", "gtbank", "access", "zenith", "uba", "fcmb", "stanbic", "sterling",
     "union", "heritage", "wema", "opay", "palmpay", "moniepoint", "kuda",
     "fidelity", "firstbank", "first bank", "ecobank", "polaris", "vfd",
-    "providus", "jaiz", "lotus", "paystack", "flutterwave",
+    "providus", "jaiz", "lotus", "paystack", "flutterwave", "paystack-titan",
 })
 
 
@@ -66,14 +75,15 @@ def _extract_memo(raw: str) -> str:
             if not part:
                 continue
             if _PHONE_RE.match(part):
-                continue
+                continue                      # skip phone numbers
             candidate = _MEMO_STRIP.sub('', part).strip()
             if len(candidate) <= 2:
                 continue
+            if _SKIP_SEGMENT_RE.match(candidate):
+                continue                      # skip "25GB", "500", ref codes
             if candidate.lower() in _BANK_TOKENS:
-                continue
-            # If the whole part is just a personal name (ALL CAPS words only),
-            # skip — we want the purpose, not the recipient's name.
+                continue                      # skip bank/wallet names
+            # Skip ALL-CAPS personal names (recipient names, not purposes).
             if re.fullmatch(r'[A-Z][A-Z\s]+', candidate):
                 continue
             return candidate
@@ -212,41 +222,57 @@ _BRANDS: list[tuple[str, str]] = sorted([
     ("xbox",                    "entertainment"),
     ("nintendo",                "entertainment"),
 
-    # ── bills ─────────────────────────────────────────────────────────────────
-    ("ikeja electric",          "bills"),
-    ("eko electricity",         "bills"),
-    ("kano electricity",        "bills"),
-    ("phed electricity",        "bills"),
-    ("bedc electricity",        "bills"),
-    ("jed electricity",         "bills"),
-    ("eedc enugu",              "bills"),
-    ("jos electricity",         "bills"),
-    ("ibadan disco",            "bills"),
-    ("swift networks",          "bills"),
-    ("smile internet",          "bills"),
+    # ── utilities (electricity / water / airtime / data / internet) ──────────
+    # OPay / PalmPay / Moniepoint service codes (pipe-segment format)
+    ("mobile data",             "utilities"),
+    ("data purchase",           "utilities"),
+    ("airtime purchase",        "utilities"),
+    ("bill payment",            "utilities"),
+    ("datamtn",                 "utilities"),
+    ("dataairtel",              "utilities"),
+    ("dataglo",                 "utilities"),
+    ("data9mobile",             "utilities"),
+    ("dataetisalat",            "utilities"),
+    ("airtimemtn",              "utilities"),
+    ("airtimeairtel",           "utilities"),
+    ("airtimeglo",              "utilities"),
+    ("airtime9mobile",          "utilities"),
+    ("ikeja electric",          "utilities"),
+    ("eko electricity",         "utilities"),
+    ("kano electricity",        "utilities"),
+    ("phed electricity",        "utilities"),
+    ("bedc electricity",        "utilities"),
+    ("jed electricity",         "utilities"),
+    ("eedc enugu",              "utilities"),
+    ("jos electricity",         "utilities"),
+    ("ibadan disco",            "utilities"),
+    ("swift networks",          "utilities"),
+    ("smile internet",          "utilities"),
+    ("aedc abuja",              "utilities"),
+    ("spectranet",              "utilities"),
+    ("enedisco",                "utilities"),
+    ("wakanet",                 "utilities"),
+    ("ekedc",                   "utilities"),
+    ("ikedc",                   "utilities"),
+    ("kedco",                   "utilities"),
+    ("ibedc",                   "utilities"),
+    ("tizeti",                  "utilities"),
+    ("ipnx",                    "utilities"),
+    ("phed",                    "utilities"),
+    ("bedc",                    "utilities"),
+    ("aedc",                    "utilities"),
+    ("eedc",                    "utilities"),
+    ("ntel",                    "utilities"),
+
+    # ── bills (rent / insurance / recurring subscriptions) ───────────────────
+    ("nhis",                    "bills"),
     ("hygeia hmo",              "bills"),
     ("reliance hmo",            "bills"),
     ("leadway insurance",       "bills"),
     ("aiico insurance",         "bills"),
     ("mutual benefit",          "bills"),
     ("canal plus",              "bills"),
-    ("aedc abuja",              "bills"),
-    ("spectranet",              "bills"),
-    ("enedisco",                "bills"),
     ("startimes",               "bills"),
-    ("wakanet",                 "bills"),
-    ("ekedc",                   "bills"),
-    ("ikedc",                   "bills"),
-    ("kedco",                   "bills"),
-    ("ibedc",                   "bills"),
-    ("tizeti",                  "bills"),
-    ("ipnx",                    "bills"),
-    ("phed",                    "bills"),
-    ("bedc",                    "bills"),
-    ("aedc",                    "bills"),
-    ("eedc",                    "bills"),
-    ("ntel",                    "bills"),
-    ("nhis",                    "bills"),
     ("dstv",                    "bills"),
     ("gotv",                    "bills"),
     ("hitv",                    "bills"),
@@ -344,31 +370,41 @@ _PHRASES: dict[str, list[str]] = {
         "for bet", "for betting", "betting money",
         "for movie", "for cinema",
     ],
-    "bills": [
+    "utilities": [
+        # electricity
         "electricity token", "prepaid token", "power token", "meter token",
         "electricity bill", "electric bill", "light bill", "nepa bill",
         "electricity payment", "electricity recharge",
         "prepaid meter", "postpaid bill", "utility bill",
+        # internet & data
         "internet subscription", "broadband subscription", "wifi subscription",
         "internet data", "data bundle", "data plan", "data subscription", "data purchase",
-        "mtn airtime", "airtel airtime", "glo airtime", "9mobile airtime",
-        "airtime recharge", "airtime purchase", "airtime topup", "airtime top up",
-        "vtu airtime", "airtime vtu", "airtime transfer",
         "mtn data", "airtel data", "glo data", "9mobile data",
         "mtn subscription", "airtel subscription", "glo subscription",
-        "cable tv", "cable subscription",
+        # airtime
+        "mtn airtime", "airtel airtime", "glo airtime", "9mobile airtime",
+        "airtime recharge", "airtime purchase", "airtime topup", "airtime top up",
+        "vtu airtime", "airtime vtu", "airtime transfer", "buy airtime",
+        # water
         "water bill", "water rate", "water board",
+        # colloquial
+        "for light", "for electricity", "for airtime", "for data", "for internet",
+        "light bill money", "buy data",
+    ],
+    "bills": [
+        # cable TV subscriptions
+        "cable tv", "cable subscription", "cable tv subscription",
+        "for dstv", "for gotv",
+        # rent
         "house rent", "monthly rent", "annual rent", "rent payment",
+        "for rent", "rent money",
         "service charge", "estate levy", "facility management",
         "ground rent", "tenement rate",
+        # insurance
         "insurance premium", "life insurance", "car insurance", "hmo premium",
         "health insurance", "hmo subscription",
+        # waste
         "waste management", "sanitation levy",
-        # colloquial memo words
-        "for rent", "for light", "for electricity", "for airtime",
-        "for data", "for internet", "for cable", "buy airtime",
-        "for dstv", "for gotv",
-        "light bill money", "rent money",
     ],
     "health": [
         "pharmacy store", "drug store", "chemist",
@@ -483,18 +519,24 @@ _SCORES: dict[str, dict[str, float]] = {
         "casino": 0.90, "lottery": 0.85, "movie": 0.80, "movies": 0.80,
         "bet": 0.75, "wager": 0.85, "odds": 0.75,
     },
-    "bills": {
+    "utilities": {
+        # electricity DISCOs
         "ekedc": 0.99, "ikedc": 0.99, "phed": 0.99, "aedc": 0.99,
         "bedc": 0.99, "kedco": 0.99, "enedisco": 0.99, "ibedc": 0.99,
+        # internet providers
         "spectranet": 0.99, "tizeti": 0.99, "ipnx": 0.99,
-        "gotv": 0.99, "dstv": 0.99, "startimes": 0.99,
+        # generic utility words
         "electricity": 0.90, "airtime": 0.90, "vtu": 0.90,
-        "rent": 0.80, "landlord": 0.85,
-        "internet": 0.70, "broadband": 0.80, "data": 0.60,
-        "utility": 0.75, "token": 0.70, "recharge": 0.75,
-        "prepaid": 0.70, "postpaid": 0.75, "bill": 0.65,
-        "subscription": 0.55, "insurance": 0.65, "premium": 0.55,
-        "cable": 0.70, "wifi": 0.75, "light": 0.60, "nepa": 0.85,
+        "internet": 0.80, "broadband": 0.80, "data": 0.70,
+        "token": 0.75, "recharge": 0.80, "prepaid": 0.75, "nepa": 0.90,
+        "wifi": 0.80, "light": 0.65, "utility": 0.75,
+        "mtn": 0.65, "airtel": 0.65, "glo": 0.65,
+    },
+    "bills": {
+        "gotv": 0.99, "dstv": 0.99, "startimes": 0.99,
+        "rent": 0.85, "landlord": 0.90,
+        "insurance": 0.75, "premium": 0.65,
+        "cable": 0.75, "subscription": 0.60,
     },
     "health": {
         "pharmacy": 0.95, "pharmacist": 0.95, "chemist": 0.90, "dispensary": 0.90,

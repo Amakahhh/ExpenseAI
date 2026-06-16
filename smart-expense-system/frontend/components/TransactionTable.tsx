@@ -163,8 +163,8 @@ export default function TransactionTable({ transactions: initial }: { transactio
                     <td className="mono" style={{ color: "var(--muted)", fontSize: 12, whiteSpace: "nowrap" }}>
                       {tx.date}
                     </td>
-                    <td style={{ maxWidth: 340 }}>
-                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 }}>
+                    <td style={{ maxWidth: 400 }}>
+                      <div style={{ fontSize: 13, wordBreak: "break-word", lineHeight: 1.45 }}>
                         {tx.description}
                       </div>
                       {tx.is_corrected && (

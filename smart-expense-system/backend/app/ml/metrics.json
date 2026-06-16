@@ -4,8 +4,8 @@
     "weighted_precision": 1.0,
     "weighted_recall": 1.0,
     "weighted_f1": 1.0,
-    "avg_confidence": 0.8852,
-    "test_samples": 148
+    "avg_confidence": 0.8863,
+    "test_samples": 150
   },
   "per_category": {
     "food": {
@@ -26,11 +26,17 @@
       "f1_score": 1.0,
       "support": 19
     },
+    "utilities": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0,
+      "support": 14
+    },
     "bills": {
       "precision": 1.0,
       "recall": 1.0,
       "f1_score": 1.0,
-      "support": 19
+      "support": 7
     },
     "health": {
       "precision": 1.0,
@@ -62,6 +68,7 @@
       "food",
       "transport",
       "entertainment",
+      "utilities",
       "bills",
       "health",
       "education",
@@ -77,9 +84,22 @@
         0,
         0,
         0,
+        0,
         0
       ],
       [
+        0,
+        19,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
         0,
         19,
         0,
@@ -92,7 +112,8 @@
       [
         0,
         0,
-        19,
+        0,
+        14,
         0,
         0,
         0,
@@ -103,13 +124,15 @@
         0,
         0,
         0,
-        19,
+        0,
+        7,
         0,
         0,
         0,
         0
       ],
       [
+        0,
         0,
         0,
         0,
@@ -125,6 +148,7 @@
         0,
         0,
         0,
+        0,
         19,
         0,
         0
@@ -136,10 +160,12 @@
         0,
         0,
         0,
+        0,
         19,
         0
       ],
       [
+        0,
         0,
         0,
         0,

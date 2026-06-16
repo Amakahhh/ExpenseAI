@@ -76,26 +76,29 @@ TEST_DATA = [
     ("SILVERBIRD CINEMA", "entertainment"),
     ("BETWAY", "entertainment"),
 
-    # bills
-    ("EKEDC ELECTRICITY TOKEN PURCHASE", "bills"),
-    ("MTN AIRTIME RECHARGE 1000", "bills"),
+    # utilities (electricity / airtime / data / internet / water)
+    ("EKEDC ELECTRICITY TOKEN PURCHASE", "utilities"),
+    ("MTN AIRTIME RECHARGE 1000", "utilities"),
+    ("SPECTRANET INTERNET SUBSCRIPTION", "utilities"),
+    ("IKEDC PREPAID TOKEN PAYMENT", "utilities"),
+    ("AIRTEL DATA BUNDLE PURCHASE", "utilities"),
+    ("WATER BILL PAYMENT LSWC", "utilities"),
+    ("AIRTIME TOPUP GLO NETWORK", "utilities"),
+    ("PHED ELECTRICITY PAYMENT", "utilities"),
+    ("AIRTIME", "utilities"),
+    ("DATA PURCHASE MTN", "utilities"),
+    ("PREPAID METER TOKEN", "utilities"),
+    ("INTERNET DATA SUBSCRIPTION", "utilities"),
+    # OPay / PalmPay service codes
+    ("Mobile Data | 7037022479 | DataMtn | 25GB", "utilities"),
+    ("Airtime | 0803456789 | AirtimeGlo | 500", "utilities"),
+    # bills (rent / cable / insurance)
     ("DSTV SUBSCRIPTION RENEWAL", "bills"),
-    ("SPECTRANET INTERNET SUBSCRIPTION", "bills"),
-    ("IKEDC PREPAID TOKEN PAYMENT", "bills"),
-    ("AIRTEL DATA BUNDLE PURCHASE", "bills"),
     ("GOTV MONTHLY SUBSCRIPTION", "bills"),
     ("HOUSE RENT PAYMENT DECEMBER", "bills"),
-    ("WATER BILL PAYMENT LSWC", "bills"),
-    ("AIRTIME TOPUP GLO NETWORK", "bills"),
-    ("PHED ELECTRICITY PAYMENT", "bills"),
     ("NHIS HEALTH INSURANCE PREMIUM", "bills"),
-    # harder bills cases
     ("DSTV", "bills"),
     ("GOTV PAYMENT", "bills"),
-    ("AIRTIME", "bills"),
-    ("DATA PURCHASE MTN", "bills"),
-    ("PREPAID METER TOKEN", "bills"),
-    ("INTERNET DATA SUBSCRIPTION", "bills"),
 
     # health
     ("MEDPLUS PHARMACY DRUG PURCHASE", "health"),
