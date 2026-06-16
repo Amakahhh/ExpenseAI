@@ -1028,6 +1028,29 @@ async def upload_transactions(
 
     # ── classify and save ─────────────────────────────────────────────────────
     classifications = classify_batch(descriptions)
+
+    # Apply this user's past corrections to matching descriptions so that
+    # learning survives Render restarts (DB is the source of truth on Render
+    # where the local filesystem is ephemeral).
+    past_corrections = {
+        t.description.lower().strip(): t.corrected_category
+        for t in db.query(Transaction)
+            .filter(
+                Transaction.user_id == current_user.id,
+                Transaction.is_corrected == True,
+            )
+            .all()
+        if t.corrected_category and t.description
+    }
+    if past_corrections:
+        for i, desc in enumerate(descriptions):
+            key = desc.lower().strip()
+            if key in past_corrections:
+                classifications[i] = {
+                    "category": past_corrections[key],
+                    "confidence": 1.0,
+                }
+
     session_id = str(uuid.uuid4())
 
     for desc, amt, dt, tx_type, clf in zip(descriptions, amounts, dates, tx_types, classifications):

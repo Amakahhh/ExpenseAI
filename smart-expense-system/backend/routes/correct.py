@@ -3,13 +3,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from models.database import get_db, Transaction, User
 from routes.auth import get_current_user
-from services.classifier import update_prototype
+from services.classifier import CATEGORIES, update_prototype
 
 router = APIRouter()
 
-VALID_CATEGORIES = frozenset(
-    ["food", "transport", "entertainment", "bills", "health", "education", "shopping", "other"]
-)
+VALID_CATEGORIES = frozenset(CATEGORIES)
 
 
 class CorrectRequest(BaseModel):

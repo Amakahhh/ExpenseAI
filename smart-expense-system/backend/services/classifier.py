@@ -823,6 +823,22 @@ def _classify_with_ai(memo: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# User corrections — checked before all other passes
+# ─────────────────────────────────────────────────────────────────────────────
+
+import json as _json
+
+_CORRECTIONS_FILE = os.path.join(os.path.dirname(__file__), "user_corrections.json")
+_CORRECTIONS: dict[str, str] = {}
+
+try:
+    with open(_CORRECTIONS_FILE) as _f:
+        _CORRECTIONS = _json.load(_f)
+except Exception:
+    pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -830,6 +846,10 @@ def classify_transaction(description: str) -> dict:
     text = (description or "").lower().strip()
     if not text:
         return {"category": "other", "confidence": 0.45}
+
+    # User corrections take highest priority
+    if text in _CORRECTIONS:
+        return {"category": _CORRECTIONS[text], "confidence": 1.0}
 
     # Extract the human-written purpose from the end of the description.
     # e.g. "Transfer to JOHN | OPay | 0801234 | For cake"  →  "cake"
@@ -861,4 +881,13 @@ def classify_batch(descriptions: list) -> list:
 
 
 def update_prototype(category: str, description: str) -> None:
-    pass
+    """Store a user correction so it takes effect immediately and persists across restarts."""
+    key = (description or "").lower().strip()
+    if not key or category not in CATEGORIES:
+        return
+    _CORRECTIONS[key] = category
+    try:
+        with open(_CORRECTIONS_FILE, "w") as f:
+            _json.dump(_CORRECTIONS, f, indent=2)
+    except Exception:
+        pass
