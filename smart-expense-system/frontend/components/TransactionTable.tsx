@@ -2,7 +2,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { Transaction, correctTransaction } from "@/lib/api";
 
-const CATEGORIES = ["food","transport","entertainment","bills","health","education","shopping","utilities","savings","other"] as const;
+const CATEGORIES = ["food","transport","entertainment","bills","health","education","shopping","utilities","other"] as const;
 
 function catClass(cat: string): string {
   const c = cat?.toLowerCase().trim() ?? "";
@@ -83,7 +83,9 @@ export default function TransactionTable({ transactions: initial }: { transactio
       await correctTransaction(tx.id, newCat);
       setRows((prev) => prev.map((t) => t.id === tx.id ? { ...t, is_corrected: true, corrected_category: newCat } : t));
       setToast("Correction saved");
-    } catch { } finally { setCorrecting(null); }
+    } catch (e) {
+      setToast("Failed to save — please try again");
+    } finally { setCorrecting(null); }
   }, []);
 
   const expCount = rows.filter((t) => t.transaction_type !== "credit").length;
